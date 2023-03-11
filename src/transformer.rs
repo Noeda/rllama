@@ -121,10 +121,14 @@ impl Transformer {
         n_heads: usize,
         max_seq_len: usize,
         eps: f64,
-        n_local_heads: usize,
-        head_dim: usize,
         data_dir: P,
     ) -> Result<Transformer, UnpicklingError> {
+        assert_eq!(dim % n_heads, 0);
+        let head_dim = dim / n_heads;
+        let n_local_heads = n_heads; // I think the local heads is an artifact of the original
+                                     // implementation that used multi-GPU in the Facebook repo.
+                                     // Should delete it later.
+
         let data_dir: &Path = data_dir.as_ref();
 
         let progress_bar = ProgressBar::new(n_layers as u64);
@@ -149,9 +153,7 @@ impl Transformer {
         let output = Tensor::from_unpickled(unpickled, "output.weight", data_dir)?.to_f32();
 
         Ok(Transformer {
-            // TODO: maybe rotary embedding can be computed on the fly if the sequence gets really long. I just
-            // slapped * 20 on max seq len here.
-            freqs_cis: compute_freqs_cis(dim / n_heads, max_seq_len * 20, 10000.0),
+            freqs_cis: compute_freqs_cis(dim / n_heads, max_seq_len, 10000.0),
             emb,
             dim,
             n_layers,
@@ -186,7 +188,6 @@ impl Transformer {
         tokens: &[TokenId],
         start_pos: usize,
         caches: &mut TransformerCaches,
-        shifts: usize,
     ) -> Tensor {
         assert!(caches.layer_caches.len() == self.n_layers);
         let mask: Option<Tensor> = if tokens.len() > 1 {
@@ -215,7 +216,6 @@ impl Transformer {
                 &self.freqs_cis,
                 &mask,
                 &mut caches.layer_caches[idx],
-                shifts,
             );
         }
         let out = self.norm.forward(&emb_tensor);
@@ -265,17 +265,11 @@ impl TransformerBlock {
         freqs_cis: &FreqsCis,
         mask: &Option<Tensor>,
         attention_cache: &mut AttentionCache,
-        shifts: usize,
     ) -> Tensor {
         let attnorm_out = self.attention_norm.forward(x);
-        let att_out = self.attn.forward(
-            &attnorm_out,
-            start_pos,
-            freqs_cis,
-            mask,
-            attention_cache,
-            shifts,
-        );
+        let att_out = self
+            .attn
+            .forward(&attnorm_out, start_pos, freqs_cis, mask, attention_cache);
         let h = x.add(&att_out);
         let att_out = self.ffn_norm.forward(&h);
         let att_out = self.feed_forward.forward(&att_out).transpose();
@@ -404,7 +398,6 @@ impl Attention {
         freqs_cis: &FreqsCis,
         mask: &Option<Tensor>,
         attention_cache: &mut AttentionCache,
-        shifts: usize,
     ) -> Tensor {
         let seq_len = x.rows();
         let (xq_out, (xk_out, xv_out)) = rayon::join(
@@ -432,13 +425,8 @@ impl Attention {
                 .row(idx)
                 .view(self.n_local_heads as i64, self.head_dim as i64);
 
-            let (xq_row, xk_row) = apply_rotary_emb(
-                &xq_row,
-                &xk_row,
-                freqs_cis,
-                idx as usize,
-                start_pos + shifts,
-            );
+            let (xq_row, xk_row) =
+                apply_rotary_emb(&xq_row, &xk_row, freqs_cis, idx as usize, start_pos);
 
             xq_views.push(xq_row);
             xk_views.push(xk_row);

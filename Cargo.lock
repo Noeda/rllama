@@ -800,6 +800,8 @@ dependencies = [
  "protobuf-parse",
  "rand",
  "rayon",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
