@@ -1,4 +1,4 @@
-# AdeonLLaMA
+# RLLaMA
 
 This is my attempt at making the LLaMA language model working on a pure Rust
 CPU implementation. I was inspired by an amazing CPU implementation here:
