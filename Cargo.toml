@@ -1,0 +1,39 @@
+[package]
+name = "rllama"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rllama"
+path = "src/main.rs"
+
+[dependencies]
+protobuf = "3.2"
+thiserror = "1.0"
+half = "2.2"
+num-complex = "0.4"
+embedded-profiling = "0.3"
+rand = "0.8"
+approx = "0.5"
+rayon = "1.7"
+clap = { version = "4.1", features = ["derive"] }
+indicatif = "0.17"
+
+# We need protobuf compiler
+[build-dependencies]
+protobuf-codegen = "3.2"
+protobuf-parse = "3.2"
+
+[dev-dependencies]
+criterion = "0.4"
+
+[profile.release]
+debug = true
+
+[[bench]]
+path = "src/benches/benchmark.rs"
+name = "benchmark"
+harness = false
