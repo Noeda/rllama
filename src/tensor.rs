@@ -865,8 +865,8 @@ impl Tensor {
 
         unsafe {
             let result = Tensor::uninitialized(self.rows, 1, self.dtype);
-            let capacity_cols: i64 = self.capacity_cols as i64;
-            let result_capacity_cols = result.capacity_cols as i64;
+            let capacity_cols: i64 = self.capacity_cols;
+            let result_capacity_cols: i64 = result.capacity_cols;
             let col_its: usize = if self.cols % 8 == 0 {
                 (self.cols / 8) as usize
             } else {
@@ -902,6 +902,8 @@ impl Tensor {
     }
 
     // Computes matrix multiplication assuming left side has number of rows as 1
+    #[allow(clippy::erasing_op)]
+    #[allow(clippy::identity_op)]
     pub fn vector_matrix_mul(&self, other: &Tensor) -> Tensor {
         if self.cols != other.rows {
             panic!(
@@ -938,6 +940,9 @@ impl Tensor {
                     let row = row8 * 8;
                     let left = _mm256_loadu_ps(left_data.add(row));
                     let mut r = [0.0f32; 8];
+                    // i hate you clippy because you ask me
+                    // to make code more unreadable
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..8 {
                         if row + i < other.rows as usize {
                             r[i] = *right_data.add((row + i) * other_capacity_cols + col);

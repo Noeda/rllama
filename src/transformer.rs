@@ -62,6 +62,33 @@ impl AttentionCache {
         }
         AttentionCache { cache_k, cache_v }
     }
+
+    fn shift_left(&mut self, shifts: usize) {
+        for _ in 0..shifts {
+            for idx in 0..self.cache_k.len() {
+                let mut k = self.cache_k[idx].write().unwrap();
+                let mut v = self.cache_v[idx].write().unwrap();
+                let k_rows = k.rows();
+                let k_cols = k.cols();
+                for head_idx in 0..k_rows {
+                    for seq_idx in 0..k_cols - 1 {
+                        let kval = k.get_f32(head_idx, seq_idx + 1);
+                        let vval = v.get_f32(head_idx, seq_idx + 1);
+                        k.set_f32(head_idx, seq_idx, kval);
+                        v.set_f32(head_idx, seq_idx, vval);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl TransformerCaches {
+    pub fn shift_left(&mut self, shifts: usize) {
+        for layer in self.layer_caches.iter_mut() {
+            layer.shift_left(shifts);
+        }
+    }
 }
 
 pub struct RMSNorm {
@@ -122,7 +149,9 @@ impl Transformer {
         let output = Tensor::from_unpickled(unpickled, "output.weight", data_dir)?.to_f32();
 
         Ok(Transformer {
-            freqs_cis: compute_freqs_cis(dim / n_heads, max_seq_len * 2, 10000.0),
+            // TODO: maybe rotary embedding can be computed on the fly if the sequence gets really long. I just
+            // slapped * 20 on max seq len here.
+            freqs_cis: compute_freqs_cis(dim / n_heads, max_seq_len * 20, 10000.0),
             emb,
             dim,
             n_layers,
@@ -157,6 +186,7 @@ impl Transformer {
         tokens: &[TokenId],
         start_pos: usize,
         caches: &mut TransformerCaches,
+        shifts: usize,
     ) -> Tensor {
         assert!(caches.layer_caches.len() == self.n_layers);
         let mask: Option<Tensor> = if tokens.len() > 1 {
@@ -185,6 +215,7 @@ impl Transformer {
                 &self.freqs_cis,
                 &mask,
                 &mut caches.layer_caches[idx],
+                shifts,
             );
         }
         let out = self.norm.forward(&emb_tensor);
@@ -234,11 +265,17 @@ impl TransformerBlock {
         freqs_cis: &FreqsCis,
         mask: &Option<Tensor>,
         attention_cache: &mut AttentionCache,
+        shifts: usize,
     ) -> Tensor {
         let attnorm_out = self.attention_norm.forward(x);
-        let att_out = self
-            .attn
-            .forward(&attnorm_out, start_pos, freqs_cis, mask, attention_cache);
+        let att_out = self.attn.forward(
+            &attnorm_out,
+            start_pos,
+            freqs_cis,
+            mask,
+            attention_cache,
+            shifts,
+        );
         let h = x.add(&att_out);
         let att_out = self.ffn_norm.forward(&h);
         let att_out = self.feed_forward.forward(&att_out).transpose();
@@ -300,8 +337,8 @@ impl FeedForward {
 
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let (w1_out, w3_out) = rayon::join(
-            || self.w1.matrix_mul_transposed(&x),
-            || self.w3.matrix_mul_transposed(&x),
+            || self.w1.matrix_mul_transposed(x),
+            || self.w3.matrix_mul_transposed(x),
         );
         let w1_out = w1_out.silu();
         let w1w3_out = w1_out.hadamard_product(&w3_out).transpose();
@@ -367,6 +404,7 @@ impl Attention {
         freqs_cis: &FreqsCis,
         mask: &Option<Tensor>,
         attention_cache: &mut AttentionCache,
+        shifts: usize,
     ) -> Tensor {
         let seq_len = x.rows();
         let (xq_out, (xk_out, xv_out)) = rayon::join(
@@ -394,8 +432,13 @@ impl Attention {
                 .row(idx)
                 .view(self.n_local_heads as i64, self.head_dim as i64);
 
-            let (xq_row, xk_row) =
-                apply_rotary_emb(&xq_row, &xk_row, freqs_cis, idx as usize, start_pos);
+            let (xq_row, xk_row) = apply_rotary_emb(
+                &xq_row,
+                &xk_row,
+                freqs_cis,
+                idx as usize,
+                start_pos + shifts,
+            );
 
             xq_views.push(xq_row);
             xk_views.push(xk_row);
@@ -464,8 +507,7 @@ impl Attention {
                 }
                 let concat_vec2: Vec<&Tensor> = concat_vec.iter().collect();
                 let xq_row = Tensor::concat(&concat_vec2).view(1, 4096);
-                let result = xq_row.matrix_mul_transposed(&self.wo);
-                result
+                xq_row.matrix_mul_transposed(&self.wo)
             })
             .collect();
 
