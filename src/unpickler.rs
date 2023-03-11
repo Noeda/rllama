@@ -72,14 +72,14 @@ impl Value {
 
     pub fn get_persistent_id(&self) -> Option<&Value> {
         match self {
-            Value::PersistentId(v) => Some(&v),
+            Value::PersistentId(v) => Some(v),
             _ => None,
         }
     }
 
     pub fn get_tuple(&self) -> Option<&[Value]> {
         match self {
-            Value::Tuple(v) => Some(&v),
+            Value::Tuple(v) => Some(v),
             _ => None,
         }
     }
@@ -92,7 +92,7 @@ impl Value {
                 Value::Global(ref module_name, ref attribute_name) => {
                     if module_name == "torch._utils" && attribute_name == "_rebuild_tensor_v2" {
                         match **args {
-                            Value::Tuple(ref args) => self.to_tensor_builder2(&args),
+                            Value::Tuple(ref args) => self.to_tensor_builder2(args),
                             _ => None,
                         }
                     } else {
@@ -146,14 +146,14 @@ impl Value {
             return None;
         }
 
-        return Some(TensorBuilder {
+        Some(TensorBuilder {
             src_path: PathBuf::from(storage_filename),
             dtype,
             stride: row_stride,
             rows,
             cols,
             nitems,
-        });
+        })
     }
 
     fn to_tensor_builder2_6items(args: &[Value]) -> Option<TensorBuilder> {
@@ -203,14 +203,14 @@ impl Value {
             return None;
         }
 
-        return Some(TensorBuilder {
+        Some(TensorBuilder {
             src_path: PathBuf::from(storage_filename),
             dtype,
             stride: row_stride,
             rows,
             cols,
             nitems,
-        });
+        })
 
         /* Args should look like this (took random example from debug print) :
             0 PERSISTENT_ID
@@ -545,7 +545,7 @@ pub fn unpickle(bytes: &[u8]) -> Result<Value, UnpicklingError> {
                     "Stack is empty while handling LONG_BINPUT".to_string(),
                 ));
             }
-            memo.insert(key as u32, stack.last().unwrap().clone());
+            memo.insert(key, stack.last().unwrap().clone());
             bytes = &bytes[5..];
             continue;
         }

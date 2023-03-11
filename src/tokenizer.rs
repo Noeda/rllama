@@ -142,7 +142,7 @@ impl Tokenizer {
     pub fn tokenize_to_ids<S: AsRef<str>>(&self, s: S) -> Vec<TokenId> {
         let mut s: String = format!("▁{}", s.as_ref());
         // Replace all space characters with a special token.
-        s = s.replace(" ", "▁");
+        s = s.replace(' ', "▁");
 
         let pieces = self.tokenize_to_pieces(s);
         let mut result = Vec::new();

@@ -40,8 +40,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // We chop off file name from model_path and append "data/"
     let model_data_dir = model_path
-        .split("/")
-        .take(model_path.split("/").count() - 1)
+        .split('/')
+        .take(model_path.split('/').count() - 1)
         .collect::<Vec<&str>>()
         .join("/")
         + "/data/";
@@ -95,7 +95,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             let tok = tok.id_to_str(*tok_id);
-            tok_str = tok_str + tok.replace("▁", " ").as_str();
+            tok_str += tok.replace('▁', " ").as_str();
         }
         println!("{}", tok_str);
     }

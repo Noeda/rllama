@@ -85,6 +85,7 @@ pub struct FeedForward {
 }
 
 impl Transformer {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_unpickled<P: AsRef<Path>>(
         unpickled: &unpickler::Value,
         emb: Embedding,
@@ -117,9 +118,8 @@ impl Transformer {
             .collect::<Result<Vec<TransformerBlock>, UnpicklingError>>()?;
         std::mem::drop(progress_bar);
 
-        let norm = RMSNorm::from_unpickled(unpickled, format!("norm.weight"), eps, data_dir)?;
-        let output =
-            Tensor::from_unpickled(unpickled, format!("output.weight"), data_dir)?.to_f32();
+        let norm = RMSNorm::from_unpickled(unpickled, "norm.weight".to_string(), eps, data_dir)?;
+        let output = Tensor::from_unpickled(unpickled, "output.weight", data_dir)?.to_f32();
 
         Ok(Transformer {
             freqs_cis: compute_freqs_cis(dim / n_heads, max_seq_len * 2, 10000.0),
@@ -189,8 +189,8 @@ impl Transformer {
         }
         let out = self.norm.forward(&emb_tensor);
         let out = out.row(out.rows() - 1);
-        let prediction = self.output.matrix_mul_transposed(&out);
-        return prediction;
+
+        self.output.matrix_mul_transposed(&out)
     }
 }
 
@@ -242,8 +242,8 @@ impl TransformerBlock {
         let h = x.add(&att_out);
         let att_out = self.ffn_norm.forward(&h);
         let att_out = self.feed_forward.forward(&att_out.transpose()).transpose();
-        let att_out = h.add(&att_out);
-        return att_out;
+
+        h.add(&att_out)
     }
 }
 
@@ -255,7 +255,7 @@ impl RMSNorm {
         data_dir: P,
     ) -> Result<RMSNorm, UnpicklingError> {
         let data_dir: &Path = data_dir.as_ref();
-        let weights = Tensor::from_unpickled(unpickled, &name, data_dir)?.to_f32();
+        let weights = Tensor::from_unpickled(unpickled, name, data_dir)?.to_f32();
         Ok(Self {
             eps,
             weight: weights,
@@ -265,7 +265,7 @@ impl RMSNorm {
     fn forward(&self, x: &Tensor) -> Tensor {
         let inner = x.pow(2.0).mean_cols().add_scalar(self.eps as f32);
         let out1 = x.scalar_multiply_broadcast(&inner.rsqrt());
-        return out1.hadamard_product_broadcast(&self.weight);
+        out1.hadamard_product_broadcast(&self.weight)
     }
 }
 
@@ -307,8 +307,8 @@ impl FeedForward {
         );
         let w1_out = w1_out.silu();
         let w1w3_out = w1_out.hadamard_product(&w3_out).transpose();
-        let out = self.w2.matrix_mul_transposed(&w1w3_out);
-        return out;
+
+        self.w2.matrix_mul_transposed(&w1w3_out)
     }
 }
 
@@ -417,8 +417,8 @@ impl Attention {
                 let concat_vec2: Vec<&Tensor> = concat_vec.iter().collect();
                 let xv_row = Tensor::concat(&concat_vec2);
 
-                let mut cache_k = attention_cache.cache_k[idx as usize].write().unwrap();
-                let mut cache_v = attention_cache.cache_v[idx as usize].write().unwrap();
+                let mut cache_k = attention_cache.cache_k[idx].write().unwrap();
+                let mut cache_v = attention_cache.cache_v[idx].write().unwrap();
 
                 /*
                 let m = xq_row
@@ -442,21 +442,21 @@ impl Attention {
                         cache_v.set_f32(dim as i64, pos as i64, v);
                     }
                 }
-                let keys = cache_k.clip_cols((start_pos + seq_len as usize) as usize);
-                let values = cache_v.clip_cols((start_pos + seq_len as usize) as usize);
+                let keys = cache_k.clip_cols(start_pos + seq_len as usize);
+                let values = cache_v.clip_cols(start_pos + seq_len as usize);
 
                 let m = xq_row
                     .matrix_mul(&keys)
                     .scalar_multiply_f32(1.0 / (self.head_dim as f32).sqrt());
-                let m2 = match mask {
+
+                match mask {
                     Some(ref mask) => m
                         .add(mask)
                         .to_f32()
                         .softmax()
                         .matrix_mul_transposed(&values),
                     None => m.softmax().matrix_mul_transposed(&values),
-                };
-                m2
+                }
             })
             .collect();
 
@@ -466,18 +466,18 @@ impl Attention {
             .into_par_iter()
             .map(|idx| {
                 let mut concat_vec: Vec<Tensor> = vec![];
-                for idx2 in 0..self.n_local_heads {
-                    concat_vec.push(output[idx2 as usize].row(idx as i64));
+                for output in &output {
+                    concat_vec.push(output.row(idx));
                 }
                 let concat_vec2: Vec<&Tensor> = concat_vec.iter().collect();
                 let xq_row = Tensor::concat(&concat_vec2).view(1, 4096);
-                let xq_row = xq_row.matrix_mul_transposed(&self.wo);
-                xq_row
+
+                xq_row.matrix_mul_transposed(&self.wo)
             })
             .collect();
         let output3: Vec<&Tensor> = output2.iter().collect();
         let output2: Tensor = Tensor::concat(&output3);
-        return output2;
+        output2
     }
 }
 
@@ -513,7 +513,7 @@ fn apply_rotary_emb(
             xk_out.set_f32(row, col * 2 + 1, xk_imagpart);
         }
     }
-    return (xq_out, xk_out);
+    (xq_out, xk_out)
 }
 
 fn compute_freqs_cis(dim: usize, end: usize, theta: f64) -> FreqsCis {
@@ -526,8 +526,8 @@ fn compute_freqs_cis(dim: usize, end: usize, theta: f64) -> FreqsCis {
     let mut result: Vec<Vec<f64>> = Vec::new();
     for x in 0..end {
         let mut row = Vec::new();
-        for y in 0..freqs.len() {
-            let freq = freqs[y] * (x as f64);
+        for freq in freqs.iter() {
+            let freq = freq * (x as f64);
             row.push(freq);
         }
         result.push(row);

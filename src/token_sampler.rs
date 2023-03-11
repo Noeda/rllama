@@ -8,6 +8,12 @@ pub struct TokenSampler {
     top_k: usize,
 }
 
+impl Default for TokenSampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TokenSampler {
     pub fn new() -> Self {
         Self {
@@ -58,7 +64,7 @@ impl TokenSampler {
             logitsf.push((i as TokenId, logits.get_f32(0, i)));
         }
         logitsf.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        logitsf.truncate(self.top_k as usize);
+        logitsf.truncate(self.top_k);
         let mut p_accum: f32 = 0.0;
         for (idx, v) in logitsf.iter().enumerate() {
             p_accum += v.1;

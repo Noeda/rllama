@@ -1,21 +1,41 @@
 # AdeonLLaMA
 
 This is my attempt at making the LLaMA language model working on a pure Rust
-CPU implementation.
+CPU implementation. I was inspired by an amazing CPU implementation here:
+https://github.com/ggerganov/ggml that could run GPT-J 8B models.
 
-As of writing of this, it can run LLaMA-7B at around ~1 token per second, using
-something like 1.5 threads because I haven't yet properly figured out how to
-multithread this.
+As of writing of this, this can run LLaMA-7B at around ~1 token per second,
+using something like 1.5 threads because I haven't yet properly figured out how
+to multithread this.
 
-It uses AVX2 intrinsics to speed up itself.
+It uses AVX2 intrinsics to speed up itself. Therefore, you need an x86-family
+CPU to run this.
+
+It has a Python unpickler that understands the `.pth` files used by PyTorch.
+Well sort of, it doesn't unzip them automatically (see below).
 
 # How to run
 
 You will need the LLaMA-7B weights first. Refer to https://github.com/facebookresearch/llama/
 
-Once you have 7B weights, and the `tokenizer.model` it comes with, you can make
-it generate tokens:
+Once you have 7B weights, and the `tokenizer.model` it comes with, you need to
+decompress it.
 
 ```shell
-cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B
+$ cd LLaMA
+$ cd 7B
+$ unzip consolidated.00.pth
 ```
+
+You should then be ready to generate some text.
+
+```shell
+cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B/consolidated/data.pkl --prompt "The meaning of life is"
+```
+
+Right now it seems to use around ~25 gigabytes of memory. Internally all
+weights are cast to 32-bit floats.
+
+# Future plans
+
+This is a hobby thing for me so don't expect updates or help.

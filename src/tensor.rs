@@ -73,7 +73,7 @@ impl Clone for Tensor {
 impl Drop for Tensor {
     fn drop(&mut self) {
         unsafe {
-            if self.data != std::ptr::null_mut() {
+            if !self.data.is_null() {
                 std::alloc::dealloc(self.data, self.layout);
             }
         }
@@ -95,7 +95,7 @@ fn horizontal_sum(mut ymm: __m256) -> f32 {
         ymm = _mm256_add_ps(ymm, ymm2);
         ymm = _mm256_hadd_ps(ymm, ymm);
         ymm = _mm256_hadd_ps(ymm, ymm);
-        return _mm256_cvtss_f32(ymm);
+        _mm256_cvtss_f32(ymm)
     }
 }
 
@@ -190,6 +190,7 @@ impl Tensor {
         }
     }
 
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn uninitialized(rows: i64, cols: i64, dtype: TensorDType) -> Self {
         if rows == 0 || cols == 0 {
             let mut tensor = Self::empty();
@@ -203,7 +204,7 @@ impl Tensor {
         let layout =
             Layout::from_size_align((nitems as usize) * dtype.bytes_per_item(), 32).unwrap();
         let data = unsafe { std::alloc::alloc(layout) };
-        if data == std::ptr::null_mut() {
+        if data.is_null() {
             panic!("Failed to allocate tensor");
         }
         // Even though we are uninitialized, we should zero out the extra space between the
@@ -443,7 +444,7 @@ impl Tensor {
     }
 
     pub fn concat(pieces: &[&Tensor]) -> Tensor {
-        if pieces.len() == 0 {
+        if pieces.is_empty() {
             return Tensor::empty();
         }
         let mut total_rows: i64 = 0;
@@ -745,7 +746,7 @@ impl Tensor {
 
                 unsafe {
                     for row in 0..self_rows {
-                        let row = row as usize;
+                        let row = row;
                         for col in 0..self_cols {
                             let mut target8: __m256 = _mm256_setzero_ps();
                             for p in 0..src_cols_its {
@@ -819,7 +820,7 @@ impl Tensor {
             for row in 0..self.rows {
                 let mut sum8: __m256 = _mm256_setzero_ps();
                 for col in 0..col_its {
-                    let col = (col * 8) as usize;
+                    let col = col * 8;
                     let left_side8 =
                         _mm256_loadu_ps(self_data.add((row * self.capacity_cols) as usize + col));
                     let right_side8 = _mm256_loadu_ps(other_data.add(col));
@@ -885,7 +886,7 @@ impl Tensor {
         let layout =
             Layout::from_size_align((nitems as usize) * dtype.bytes_per_item(), 32).unwrap();
         let data = unsafe { std::alloc::alloc_zeroed(layout) };
-        if data == std::ptr::null_mut() {
+        if data.is_null() {
             panic!("Failed to allocate tensor");
         }
         Self {
@@ -1044,7 +1045,7 @@ impl TensorBuilder {
             unsafe {
                 std::ptr::copy_nonoverlapping(buf.as_ptr(), tensor.data.add(cursor), buf.len());
             }
-            cursor = cursor + (tensor.capacity_cols as usize * 2);
+            cursor += tensor.capacity_cols as usize * 2;
         }
         Ok(tensor.to_f32())
     }
