@@ -14,7 +14,9 @@ struct Cli {
     #[arg(long)]
     tokenizer_path: String,
     #[arg(long)]
-    prompt: String,
+    prompt: Option<String>,
+    #[arg(long)]
+    prompt_file: Option<String>,
 
     #[arg(long)]
     temperature: Option<f32>,
@@ -28,11 +30,29 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let model_path = cli.model_path;
     let tokenizer_path = cli.tokenizer_path;
-    let prompt = cli.prompt;
+
+    let prompt: String = match (cli.prompt, cli.prompt_file) {
+        (Some(prompt), None) => {
+            println!("Using prompt: {}", prompt);
+            prompt
+        }
+        (None, Some(prompt_file)) => {
+            println!("Using prompt file: {}", prompt_file);
+            let mut fs = std::fs::File::open(prompt_file)?;
+            let mut bs = Vec::new();
+            fs.read_to_end(&mut bs)?;
+            std::mem::drop(fs);
+            String::from_utf8(bs)?
+        }
+        _ => {
+            println!("Please provide either a prompt or a prompt file.");
+            return Ok(());
+        }
+    };
 
     println!("Starting up. Loading tokenizer from {}...", tokenizer_path);
     let tok = Tokenizer::load(tokenizer_path.as_str())?;
-    println!("Tokenizer loeaded. Loading model from {}...", model_path);
+    println!("Tokenizer loaded. Loading model from {}...", model_path);
     let mut fs = std::fs::File::open(model_path.as_str())?;
     let mut bs = Vec::new();
     fs.read_to_end(&mut bs)?;

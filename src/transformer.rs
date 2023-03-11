@@ -241,8 +241,7 @@ impl TransformerBlock {
             .forward(&attnorm_out, start_pos, freqs_cis, mask, attention_cache);
         let h = x.add(&att_out);
         let att_out = self.ffn_norm.forward(&h);
-        let att_out = self.feed_forward.forward(&att_out.transpose()).transpose();
-
+        let att_out = self.feed_forward.forward(&att_out).transpose();
         h.add(&att_out)
     }
 }
@@ -300,7 +299,6 @@ impl FeedForward {
     }
 
     pub fn forward(&self, x: &Tensor) -> Tensor {
-        let x = x.transpose();
         let (w1_out, w3_out) = rayon::join(
             || self.w1.matrix_mul_transposed(&x),
             || self.w3.matrix_mul_transposed(&x),
@@ -308,6 +306,11 @@ impl FeedForward {
         let w1_out = w1_out.silu();
         let w1w3_out = w1_out.hadamard_product(&w3_out).transpose();
 
+        if w1w3_out.rows() == 1 {
+            return self
+                .w2
+                .matrix_vector_mul_transposed_multithreaded(&w1w3_out);
+        }
         self.w2.matrix_mul_transposed(&w1w3_out)
     }
 }
@@ -366,9 +369,15 @@ impl Attention {
         attention_cache: &mut AttentionCache,
     ) -> Tensor {
         let seq_len = x.rows();
-        let xq_out = x.matrix_mul_transposed(&self.wq);
-        let xk_out = x.matrix_mul_transposed(&self.wk);
-        let xv_out = x.matrix_mul_transposed(&self.wv);
+        let (xq_out, (xk_out, xv_out)) = rayon::join(
+            || x.matrix_mul_transposed(&self.wq),
+            || {
+                rayon::join(
+                    || x.matrix_mul_transposed(&self.wk),
+                    || x.matrix_mul_transposed(&self.wv),
+                )
+            },
+        );
 
         let mut xq_views: Vec<Tensor> = Vec::with_capacity(seq_len as usize);
         let mut xk_views: Vec<Tensor> = Vec::with_capacity(seq_len as usize);
@@ -420,20 +429,6 @@ impl Attention {
                 let mut cache_k = attention_cache.cache_k[idx].write().unwrap();
                 let mut cache_v = attention_cache.cache_v[idx].write().unwrap();
 
-                /*
-                let m = xq_row
-                    .matrix_mul(&xk_row)
-                    .scalar_multiply_f32(1.0 / (self.head_dim as f32).sqrt());
-                //println!("mask size: {} {}", mask.rows(), mask.cols());
-                //println!("m size: {} {}", m.rows(), m.cols());
-                let m2 = m.add(mask).to_f32().softmax().matrix_mul(&xv_row);
-                m2
-                println!("xk_row size: {} {}", xk_row.rows(), xk_row.cols());
-                println!("xv_row size: {} {}", xv_row.rows(), xv_row.cols());
-                println!("cache_k size: {} {}", cache_k.rows(), cache_k.cols());
-                panic!("stop");
-                */
-
                 for pos in start_pos..start_pos + seq_len as usize {
                     for dim in 0..self.head_dim {
                         let k = xk_row.get_f32(dim as i64, (pos - start_pos) as i64);
@@ -460,8 +455,6 @@ impl Attention {
             })
             .collect();
 
-        // convert from 32 matrices of size 8x128 to 8 matrices of size 32x128
-        // or rather 4096x1
         let output2: Vec<Tensor> = (0..seq_len)
             .into_par_iter()
             .map(|idx| {
@@ -471,10 +464,11 @@ impl Attention {
                 }
                 let concat_vec2: Vec<&Tensor> = concat_vec.iter().collect();
                 let xq_row = Tensor::concat(&concat_vec2).view(1, 4096);
-
-                xq_row.matrix_mul_transposed(&self.wo)
+                let result = xq_row.matrix_mul_transposed(&self.wo);
+                result
             })
             .collect();
+
         let output3: Vec<&Tensor> = output2.iter().collect();
         let output2: Tensor = Tensor::concat(&output3);
         output2

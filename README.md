@@ -4,9 +4,9 @@ This is my attempt at making the LLaMA language model working on a pure Rust
 CPU implementation. I was inspired by an amazing CPU implementation here:
 https://github.com/ggerganov/ggml that could run GPT-J 8B models.
 
-As of writing of this, this can run LLaMA-7B at around ~1 token per second,
-using something like 1.5 threads because I haven't yet properly figured out how
-to multithread this.
+As of writing of this, this can run LLaMA-7B at around ~1 token per second, on
+a Ryzen 3950X using something like 1.5 threads because I haven't yet properly
+figured out how to multithread this.
 
 It uses AVX2 intrinsics to speed up itself. Therefore, you need an x86-family
 CPU to run this.

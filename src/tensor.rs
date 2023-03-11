@@ -2,6 +2,7 @@ use crate::unpickler;
 use crate::unpickler::UnpicklingError;
 use half::f16;
 use rand::Rng;
+use rayon::prelude::*;
 use std::alloc::Layout;
 use std::arch::x86_64::*;
 use std::io::Read;
@@ -833,6 +834,73 @@ impl Tensor {
         }
     }
 
+    /// Same as matrix_vector_mul but uses threading.
+    pub fn matrix_vector_mul_transposed_multithreaded(&self, other: &Tensor) -> Tensor {
+        if self.cols != other.cols {
+            panic!(
+                "Invalid matrix-vector transposed multiplication {}x{} vs {}x{}",
+                self.rows, self.cols, other.rows, other.cols
+            );
+        }
+        assert_eq!(other.rows, 1);
+        assert_eq!(other.dtype, self.dtype);
+        assert_eq!(self.dtype, TensorDType::Float32);
+
+        // Use this to smuggle pointers to threads without Rust getting so goddamn mad
+        //
+        // Assumption usize = pointer size.
+        #[derive(Copy, Clone)]
+        struct WrappedPtr {
+            ptr: usize,
+        }
+        impl WrappedPtr {
+            fn wrap(ptr: *const u8) -> WrappedPtr {
+                WrappedPtr { ptr: ptr as usize }
+            }
+
+            fn unwrap(self) -> *const u8 {
+                self.ptr as *const u8
+            }
+        }
+
+        unsafe {
+            let result = Tensor::uninitialized(self.rows, 1, self.dtype);
+            let capacity_cols: i64 = self.capacity_cols as i64;
+            let result_capacity_cols = result.capacity_cols as i64;
+            let col_its: usize = if self.cols % 8 == 0 {
+                (self.cols / 8) as usize
+            } else {
+                (self.cols / 8 + 1) as usize
+            };
+            let self_data = WrappedPtr::wrap(self.data);
+            let other_data = WrappedPtr::wrap(other.data);
+            let result_data = WrappedPtr::wrap(result.data);
+            (0..self.rows as usize)
+                .into_par_iter()
+                .with_min_len(64)
+                .for_each(|row| {
+                    let row = row as i64;
+                    let self_data: *const f32 = self_data.unwrap() as *const f32;
+                    let other_data: *const f32 = other_data.unwrap() as *const f32;
+                    let result_data: *mut f32 = result_data.unwrap() as *mut f32;
+
+                    let mut sum8: __m256 = _mm256_setzero_ps();
+                    for col in 0..col_its {
+                        let col = col * 8;
+                        let left_side8 =
+                            _mm256_loadu_ps(self_data.add((row * capacity_cols) as usize + col));
+                        let right_side8 = _mm256_loadu_ps(other_data.add(col));
+                        sum8 = _mm256_fmadd_ps(left_side8, right_side8, sum8);
+                    }
+                    let sum: f32 = horizontal_sum(sum8);
+                    result_data
+                        .add((row * result_capacity_cols) as usize)
+                        .write(sum);
+                });
+            result
+        }
+    }
+
     // Computes matrix multiplication assuming left side has number of rows as 1
     pub fn vector_matrix_mul(&self, other: &Tensor) -> Tensor {
         if self.cols != other.rows {
@@ -842,15 +910,54 @@ impl Tensor {
             );
         }
         assert_eq!(self.rows, 1);
-        let mut result = unsafe { Tensor::uninitialized(1, other.cols, self.dtype) };
-        for col in 0..other.cols {
-            let mut sum = 0.0;
-            for row in 0..self.cols {
-                sum += self.get_f32(0, row) * other.get_f32(row, col);
+        unsafe {
+            let result = Tensor::uninitialized(1, other.cols, self.dtype);
+            let col_its: usize = if other.rows % 8 == 0 {
+                (other.rows / 8) as usize
+            } else {
+                (other.rows / 8 + 1) as usize
+            };
+            let left_data: *const f32 = self.data as *const f32;
+            let right_data: *const f32 = other.data as *const f32;
+            let tgt_data: *mut f32 = result.data as *mut f32;
+            let other_capacity_cols = other.capacity_cols as usize;
+
+            let o0: i32 = other_capacity_cols as i32 * 0 * 4;
+            let o1: i32 = other_capacity_cols as i32 * 1 * 4;
+            let o2: i32 = other_capacity_cols as i32 * 2 * 4;
+            let o3: i32 = other_capacity_cols as i32 * 3 * 4;
+            let o4: i32 = other_capacity_cols as i32 * 4 * 4;
+            let o5: i32 = other_capacity_cols as i32 * 5 * 4;
+            let o6: i32 = other_capacity_cols as i32 * 6 * 4;
+            let o7: i32 = other_capacity_cols as i32 * 7 * 4;
+
+            for col in 0..other.cols {
+                let col = col as usize;
+                let mut sum8: __m256 = _mm256_setzero_ps();
+                for row8 in 0..col_its {
+                    let row = row8 * 8;
+                    let left = _mm256_loadu_ps(left_data.add(row));
+                    let mut r = [0.0f32; 8];
+                    for i in 0..8 {
+                        if row + i < other.rows as usize {
+                            r[i] = *right_data.add((row + i) * other_capacity_cols + col);
+                        }
+                    }
+                    let right = if row + 8 <= other.rows as usize {
+                        _mm256_i32gather_ps(
+                            right_data.add(row * other_capacity_cols + col),
+                            _mm256_set_epi32(o7, o6, o5, o4, o3, o2, o1, o0),
+                            1,
+                        )
+                    } else {
+                        _mm256_loadu_ps(r.as_ptr())
+                    };
+                    sum8 = _mm256_fmadd_ps(left, right, sum8);
+                }
+                *tgt_data.add(col) = horizontal_sum(sum8);
             }
-            result.set_f32(0, col, sum);
+            result
         }
-        result
     }
 
     pub fn random(rows: i64, cols: i64, dtype: TensorDType) -> Self {
@@ -1237,6 +1344,30 @@ mod tests {
             let a = Tensor::random(16, 16, TensorDType::Float32);
             let c = a.matrix_mul_naive(&a);
             let c2 = a.matrix_mul(&a);
+
+            for row in 0..c.rows {
+                for col in 0..c.cols {
+                    assert_relative_eq!(c.get_f32(row, col), c2.get_f32(row, col), epsilon = 1e-5);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vector_mat_mul_and_naive_mat_mul_agree() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..50 {
+            let a = rng.gen_range(1..100);
+            let b = rng.gen_range(1..100);
+
+            let m1 = Tensor::random(1, a, TensorDType::Float32);
+            let m2 = Tensor::random(a, b, TensorDType::Float32);
+
+            let c = m1.matrix_mul_naive(&m2);
+            let c2 = m1.vector_matrix_mul(&m2);
+
+            assert_eq!(c.rows(), c2.rows());
+            assert_eq!(c.cols(), c2.cols());
 
             for row in 0..c.rows {
                 for col in 0..c.cols {
