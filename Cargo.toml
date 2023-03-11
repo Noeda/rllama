@@ -21,6 +21,7 @@ approx = "0.5"
 rayon = "1.7"
 clap = { version = "4.1", features = ["derive"] }
 indicatif = "0.17"
+colored = "2"
 
 # We need protobuf compiler
 [build-dependencies]
