@@ -16,7 +16,9 @@ Well sort of, it doesn't unzip them automatically (see below).
 
 # How to run
 
-You will need the LLaMA-7B weights first. Refer to https://github.com/facebookresearch/llama/
+You will need Rust. Make sure you can run `cargo` from a command line.
+
+You will need to download LLaMA-7B weights. Refer to https://github.com/facebookresearch/llama/
 
 Once you have 7B weights, and the `tokenizer.model` it comes with, you need to
 decompress it.
@@ -35,6 +37,9 @@ cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /
 
 Right now it seems to use around ~25 gigabytes of memory. Internally all
 weights are cast to 32-bit floats.
+
+You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
+settings.
 
 # Future plans
 
