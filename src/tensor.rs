@@ -1,5 +1,5 @@
 #[cfg(feature = "opencl")]
-use crate::tensor_opencl_support::{OpenCL, OpenCLError, OpenCLTensor};
+use crate::tensor_opencl_support::{OpenCL, OpenCLError, OpenCLEvent, OpenCLTensor};
 use crate::unpickler;
 use crate::unpickler::UnpicklingError;
 use half::f16;
@@ -9,6 +9,8 @@ use std::alloc::Layout;
 use std::arch::x86_64::*;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "opencl")]
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -60,7 +62,9 @@ impl TensorDType {
 pub struct Tensor {
     data: *mut u8,
     #[cfg(feature = "opencl")]
-    opencl_data: Option<OpenCLTensor>,
+    opencl_data: Arc<RwLock<Option<OpenCLTensor>>>,
+    #[cfg(feature = "opencl")]
+    waiting_for_data: Option<OpenCLEvent>, // Is OpenCL in process of sending data back to CPU?
 
     dtype: TensorDType,
     layout: Layout,
@@ -76,6 +80,18 @@ unsafe impl Sync for Tensor {}
 
 impl Clone for Tensor {
     fn clone(&self) -> Self {
+        #[cfg(feature = "opencl")]
+        {
+            if let Some(ref wfd) = self.waiting_for_data {
+                wfd.wait();
+                let mut od = self.opencl_data.write().unwrap();
+                *od = None;
+            }
+            let od = self.opencl_data.read().unwrap();
+            if od.is_some() {
+                panic!("Tried to clone a tensor that is on the GPU");
+            }
+        }
         unsafe {
             let new_tensor = Tensor::uninitialized(self.rows, self.cols, self.dtype);
             std::ptr::copy_nonoverlapping(
@@ -90,6 +106,8 @@ impl Clone for Tensor {
 
 impl Drop for Tensor {
     fn drop(&mut self) {
+        #[cfg(feature = "opencl")]
+        self.process_waiting_for_data_mut();
         unsafe {
             if !self.data.is_null() {
                 std::alloc::dealloc(self.data, self.layout);
@@ -137,7 +155,9 @@ impl Tensor {
     pub fn assume_on_cpu(&self) {
         #[cfg(feature = "opencl")]
         {
-            if self.opencl_data.is_some() {
+            self.process_waiting_for_data();
+            let od = self.opencl_data.read().unwrap();
+            if od.is_some() {
                 panic!("Tried to assume_on_cpu on a tensor that is on the GPU");
             }
         }
@@ -252,7 +272,9 @@ impl Tensor {
         Self {
             data: std::ptr::null_mut(),
             #[cfg(feature = "opencl")]
-            opencl_data: None,
+            opencl_data: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "opencl")]
+            waiting_for_data: None,
             dtype: TensorDType::Float16,
             layout: Layout::from_size_align(0, 0).unwrap(),
             rows: 0,
@@ -299,7 +321,9 @@ impl Tensor {
         Self {
             data,
             #[cfg(feature = "opencl")]
-            opencl_data: None,
+            opencl_data: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "opencl")]
+            waiting_for_data: None,
             dtype,
             rows,
             cols,
@@ -1121,7 +1145,9 @@ impl Tensor {
         Self {
             data,
             #[cfg(feature = "opencl")]
-            opencl_data: None,
+            opencl_data: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "opencl")]
+            waiting_for_data: None,
             dtype,
             rows,
             cols,
@@ -1213,17 +1239,18 @@ impl Tensor {
         }
     }
 
-    /// Sends a tensor to the GPU. This is a no-op if GPU support is not enabled, or if the tensor
-    /// is already on the GPU.
+    /// Sends a tensor to the GPU. This is a no-op if the tensor is already on the GPU.
     ///
     /// The tensor is moved asynchronously.
     #[cfg(feature = "opencl")]
     pub fn to_gpu(&mut self, cl: &OpenCL) -> Result<(), TensorError> {
-        if self.opencl_data.is_some() {
+        self.process_waiting_for_data_mut();
+        let mut od = self.opencl_data.write().unwrap();
+        if od.is_some() {
             return Ok(());
         }
         if self.dtype != TensorDType::Float16 {
-            panic!("Only float16 tensors are supported on the GPU");
+            panic!("to_gpu: Only float16 tensors are supported on the GPU");
         }
         let cl_tensor = cl.data_u16_to_gpu(
             self.data as *const u16,
@@ -1231,17 +1258,56 @@ impl Tensor {
             (self.rows * self.capacity_cols) as usize,
         )?;
         self.data = std::ptr::null_mut();
-        self.opencl_data = Some(cl_tensor);
+        *od = Some(cl_tensor);
+        Ok(())
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn process_waiting_for_data_mut(&mut self) {
+        if let Some(ref wfd) = self.waiting_for_data {
+            wfd.wait();
+            let mut od = self.opencl_data.write().unwrap();
+            *od = None;
+        }
+        self.waiting_for_data = None;
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn process_waiting_for_data(&self) {
+        if let Some(ref wfd) = self.waiting_for_data {
+            wfd.wait();
+            let mut od = self.opencl_data.write().unwrap();
+            *od = None;
+        }
+    }
+
+    /// Sends a tensor from the GPU to the CPU. This is a no-op if the tensor is already on the
+    /// CPU.
+    #[cfg(feature = "opencl")]
+    pub fn to_cpu(&mut self) -> Result<(), TensorError> {
+        self.process_waiting_for_data_mut();
+        let od = self.opencl_data.read().unwrap();
+        if od.is_none() {
+            return Ok(());
+        }
+        let data = unsafe { std::alloc::alloc(self.layout) };
+        if data.is_null() {
+            panic!("to_cpu: Failed to allocate tensor");
+        }
+        let ev = od.as_ref().unwrap().data_u16_from_gpu(data as *mut u16)?;
+        self.data = data as *mut u16 as *mut u8;
+        self.waiting_for_data = Some(ev);
         Ok(())
     }
 
     /// Make sure that the tensor has finished going to GPU. Used mostly for benchmarking.
     #[cfg(feature = "opencl")]
     pub fn wait_until_on_gpu(&mut self) {
-        if self.opencl_data.is_none() {
+        let mut od = self.opencl_data.write().unwrap();
+        if od.is_none() {
             panic!("wait_until_on_gpu: Tensor is not on GPU");
         }
-        self.opencl_data.as_mut().unwrap().wait_until_ready();
+        od.as_mut().unwrap().wait_until_ready();
     }
 
     /// Naive implementation of to_f32, used for testing that the faster methods are correct.

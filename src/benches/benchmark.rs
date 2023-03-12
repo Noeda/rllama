@@ -8,13 +8,32 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 #[cfg(feature = "opencl")]
 pub fn opencl_benchmarks(c: &mut Criterion) {
-    let orig16 = Tensor::random(1024, 1024, TensorDType::Float16);
+    let mut orig1 = Tensor::random(1, 1, TensorDType::Float16);
+    let mut orig16 = Tensor::random(1024, 1024, TensorDType::Float16);
+    let mut orig32 = Tensor::random(4096, 4096, TensorDType::Float16);
     let cl = OpenCL::new(false, 0).unwrap();
 
-    c.bench_function("1024x1024 matrix from CPU to OpenCL device", |b| {
+    c.bench_function("1x1 matrix from CPU to OpenCL device and back", |b| {
         b.iter(|| {
-            let mut orig16 = orig16.clone();
-            let _ = orig16.to_gpu(&cl);
+            let _ = orig1.to_gpu(&cl).unwrap();
+            let _ = orig1.to_cpu();
+            orig1.process_waiting_for_data();
+        })
+    });
+
+    c.bench_function("1024x1024 matrix from CPU to OpenCL device and back", |b| {
+        b.iter(|| {
+            let _ = orig16.to_gpu(&cl).unwrap();
+            let _ = orig16.to_cpu();
+            orig16.process_waiting_for_data();
+        })
+    });
+
+    c.bench_function("4096x4096 matrix from CPU to OpenCL device and back", |b| {
+        b.iter(|| {
+            let _ = orig32.to_gpu(&cl).unwrap();
+            let _ = orig32.to_cpu();
+            orig32.process_waiting_for_data();
         })
     });
 }

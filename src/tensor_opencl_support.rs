@@ -18,6 +18,12 @@ pub struct OpenCLTensor {
     write_event: Option<ocl::Event>, // if Some, the buffer is being written to
     data: *const u16,                // if non-null, is host pointer that should be freed
     data_layout: Layout,
+    nitems: usize,
+}
+
+#[derive(Debug)]
+pub struct OpenCLEvent {
+    event: ocl::Event,
 }
 
 impl Drop for OpenCLTensor {
@@ -76,6 +82,10 @@ impl OpenCL {
         Ok(OpenCL { ctx, queue })
     }
 
+    pub fn flush(&self) {
+        let _ = self.queue.flush();
+    }
+
     pub fn data_u16_to_gpu(
         &self,
         data: *const u16,
@@ -99,6 +109,7 @@ impl OpenCL {
                 write_event: Some(event),
                 data,
                 data_layout,
+                nitems,
             })
         }
     }
@@ -119,5 +130,26 @@ impl OpenCLTensor {
                 std::alloc::dealloc(self.data as *mut u8, self.data_layout);
             }
         }
+    }
+
+    pub fn data_u16_from_gpu(&self, data: *mut u16) -> Result<OpenCLEvent, OpenCLError> {
+        unsafe {
+            let mut event = Event::empty();
+            let data_slice: &mut [u16] = std::slice::from_raw_parts_mut(data, self.nitems);
+            self.buf
+                .cmd()
+                .read(data_slice)
+                .block(false)
+                .enew(&mut event)
+                .enq()?;
+            return Ok(OpenCLEvent { event });
+        }
+    }
+}
+
+impl OpenCLEvent {
+    #[inline]
+    pub fn wait(&self) {
+        self.event.wait_for().unwrap();
     }
 }
