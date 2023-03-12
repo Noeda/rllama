@@ -3,10 +3,12 @@ use crate::token_sampler::TokenSampler;
 use crate::tokenizer::{TokenId, Tokenizer};
 use crate::transformer::Transformer;
 use crate::unpickler;
+use crate::unpickler::Value;
 use clap::Parser;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -94,37 +96,53 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     pln!("Starting up. Loading tokenizer from {}...", tokenizer_path);
     let tok = Tokenizer::load(tokenizer_path.as_str())?;
     pln!("Tokenizer loaded. Loading model from {}...", model_path);
-    let mut fs = std::fs::File::open(model_path.as_str())?;
-    let mut bs = Vec::new();
-    fs.read_to_end(&mut bs)?;
-    std::mem::drop(fs);
 
-    // We chop off file name from model_path and append "data/"
-    let model_data_dir = model_path
-        .split('/')
-        .take(model_path.split('/').count() - 1)
-        .collect::<Vec<&str>>()
-        .join("/")
-        + "/data/";
-    let result = unpickler::unpickle(&bs)?;
-    pln!("Loading embeddings from {}...", model_data_dir);
-    let emb = Embedding::from_unpickled(&result, model_data_dir.clone())?;
+    let mut unpickle_results: Vec<Value> = vec![];
+
+    let mut part: usize = 0;
+    loop {
+        let model_path: PathBuf = model_path.clone().into();
+        let base_path = model_path.join(format!("consolidated.{:02}", part));
+        // The data file is in consolidated.XX/data.pkl where XX is the part number.
+        let full_path = base_path.join("data.pkl");
+        let mut fs = match std::fs::File::open(&full_path) {
+            Ok(fs) => fs,
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    break;
+                } else {
+                    return Err(err.into());
+                }
+            }
+        };
+        let mut bs = Vec::new();
+        fs.read_to_end(&mut bs)?;
+        std::mem::drop(fs);
+        pln!("Read data.pkl from path {}", full_path.display());
+
+        let result = unpickler::unpickle(&bs)?;
+        unpickle_results.push(result);
+        part += 1;
+    }
+
+    pln!("Loading embeddings from {}...", model_path);
+    let emb = Embedding::from_unpickled(&unpickle_results, model_path.clone())?;
 
     let max_seq_len = match cli.max_seq_len {
         Some(max_seq_len) => max_seq_len,
         None => 1024,
     };
 
-    pln!("Loading transformer weights from {}...", model_data_dir);
+    pln!("Loading transformer weights from {}...", model_path);
     let tr = Transformer::from_unpickled(
-        &result,
+        &unpickle_results,
         emb,
         params.dim,
         params.n_layers,
         params.n_heads,
         max_seq_len,
         params.norm_eps,
-        model_data_dir,
+        model_path,
     )?;
     pln!("All is loaded. Starting inference.");
 

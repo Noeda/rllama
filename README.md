@@ -8,11 +8,16 @@ As of writing of this, this can run LLaMA-7B at around ~1 token per second, on
 a Ryzen 3950X using something like 1.5 threads because I haven't yet properly
 figured out how to multithread this.
 
-It uses AVX2 intrinsics to speed up itself. Therefore, you need an x86-family
+I've also managed to run LLaMA-13B which just barely fits in my 64-gig machine
+with 32-bit float weights everywhere.
+
+I have not tried the bigger models yet.
+
+This uses AVX2 intrinsics to speed up itself. Therefore, you need an x86-family
 CPU to run this.
 
-It has a Python unpickler that understands the `.pth` files used by PyTorch.
-Well sort of, it doesn't unzip them automatically (see below).
+It also has a Python unpickler that understands the `.pth` files used by
+PyTorch. Well almost, it doesn't unzip them automatically (see below).
 
 # How to run
 
@@ -27,16 +32,18 @@ decompress it.
 $ cd LLaMA
 $ cd 7B
 $ unzip consolidated.00.pth
+# Only necessary for LLaMA-7B, rllama currently expected .00, .01, .02 etc.in directories
+$ mv consolidated consolidated.00
 ```
 
 You should then be ready to generate some text.
 
 ```shell
-cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B/consolidated/data.pkl --prompt "The meaning of life is"
+cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B --param-path /path/to/LLaMA/7B/params.json --prompt "The meaning of life is"
 ```
 
-Right now it seems to use around ~25 gigabytes of memory. Internally all
-weights are cast to 32-bit floats.
+Right now it seems to use around ~25 gigabytes of memory for 7B and around ~50
+gigabytes for 13B. Internally all weights are cast to 32-bit floats.
 
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.

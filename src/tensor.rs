@@ -5,7 +5,7 @@ use rand::Rng;
 use rayon::prelude::*;
 use std::alloc::Layout;
 use std::arch::x86_64::*;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -17,6 +17,7 @@ pub struct TensorBuilder {
     pub(crate) rows: i64,
     pub(crate) cols: i64,
     pub(crate) nitems: i64,
+    pub(crate) offset: i64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -29,12 +30,20 @@ pub enum TensorDType {
 pub enum TensorError {
     #[error("IO error: {0}")]
     IOError(#[from] std::io::Error),
+    #[error("IOError while reading tensor: {0} {1}")]
+    TensorBuilderReadError(std::io::Error, String),
     #[error("Invalid stride: {0}")]
     InvalidStride(i64),
+    #[error("Tried to build a tensor from zero files")]
+    TensorBuilderEmpty,
+    #[error("Tried to build a tensor from multiple files but the number of rows do not agree between the files. {0} != {1}")]
+    TensorBuilderRowsMismatch(i64, i64),
+    #[error("Tried to build a tensor from multiple files but the data types do not agree between the files. {0:?} != {1:?}")]
+    TensorBuilderDTypeMismatch(TensorDType, TensorDType),
 }
 
 impl TensorDType {
-    fn bytes_per_item(&self) -> usize {
+    pub fn bytes_per_item(&self) -> usize {
         match self {
             Self::Float16 => 2,
             Self::Float32 => 4,
@@ -115,6 +124,28 @@ impl Tensor {
             .to_tensor_builder()
             .ok_or(UnpicklingError::InvalidTensorData)?;
         let val = val.load(data_dir)?;
+        Ok(val)
+    }
+
+    pub fn from_unpickled_pieces<P: AsRef<Path>, S: AsRef<str>>(
+        unpickled: &[unpickler::Value],
+        name: S,
+        data_dir: P,
+        direction: FromPiecesDirection,
+    ) -> Result<Tensor, UnpicklingError> {
+        let data_dir: &Path = data_dir.as_ref();
+        let name: &str = name.as_ref();
+        let mut builders = Vec::new();
+        for unpickle in unpickled.iter() {
+            let val = unpickle
+                .get_str_key(name)
+                .ok_or(UnpicklingError::MissingField(name.to_string()))?;
+            let val = val
+                .to_tensor_builder()
+                .ok_or(UnpicklingError::InvalidTensorData)?;
+            builders.push(val);
+        }
+        let val = TensorBuilder::load_from_pieces(&builders, data_dir, direction)?;
         Ok(val)
     }
 
@@ -412,10 +443,16 @@ impl Tensor {
 
     pub fn hadamard_product_broadcast(&self, other: &Tensor) -> Tensor {
         if self.cols != other.cols {
-            panic!("Invalid hadamard product broadcast");
+            panic!(
+                "Invalid hadamard product broadcast: {}x{} vs {}x{}",
+                self.rows, self.cols, other.rows, other.cols
+            );
         }
         if other.rows != 1 {
-            panic!("Invalid hadamard product broadcast");
+            panic!(
+                "Invalid hadamard product broadcast: {}x{} vs {}x{}",
+                self.rows, self.cols, other.rows, other.cols
+            );
         }
         let mut result = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
         for row in 0..self.rows {
@@ -1036,7 +1073,10 @@ impl Tensor {
 
     pub fn view(&self, rows: i64, cols: i64) -> Tensor {
         if rows * cols != self.rows * self.cols {
-            panic!("Invalid tensor view");
+            panic!(
+                "Invalid tensor view, requested {}x{} but tensor is {}x{}",
+                rows, cols, self.rows, self.cols
+            );
         }
         if rows == self.rows {
             return self.clone();
@@ -1139,6 +1179,16 @@ impl Tensor {
     }
 }
 
+/// When we load multiple tensors, should we slap them together row by row, or column by column?
+///
+/// E.g. If we have 32x4 and 32x4   then Rows  --> 64x4
+///      If we have 32x4 and 32x4   then Cols  --> 32x8
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Debug)]
+pub enum FromPiecesDirection {
+    Rows,
+    Cols,
+}
+
 impl TensorBuilder {
     pub fn load<P: AsRef<Path>>(&self, data_dir: P) -> Result<Tensor, TensorError> {
         let data_dir: &Path = data_dir.as_ref();
@@ -1146,20 +1196,193 @@ impl TensorBuilder {
             return Err(TensorError::InvalidStride(self.stride));
         }
         let tensor = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
-        assert_eq!(self.dtype, TensorDType::Float16);
-        let path = data_dir.join(&self.src_path);
+        let path = data_dir
+            .join(format!("consolidated.{:02}", 0))
+            .join("data")
+            .join(&self.src_path);
 
         let mut f = std::fs::File::open(&path).unwrap();
+        f.seek(std::io::SeekFrom::Start(
+            (self.offset as u64) * self.dtype.bytes_per_item() as u64,
+        ))?;
         let mut cursor: usize = 0;
-        let mut buf: Vec<u8> = vec![0; self.cols as usize * 2];
+        let mut buf: Vec<u8> = vec![0; self.cols as usize * self.dtype.bytes_per_item()];
         for _row in 0..self.rows {
             f.read_exact(&mut buf)?;
             unsafe {
                 std::ptr::copy_nonoverlapping(buf.as_ptr(), tensor.data.add(cursor), buf.len());
             }
-            cursor += tensor.capacity_cols as usize * 2;
+            cursor += tensor.capacity_cols as usize * self.dtype.bytes_per_item();
         }
         Ok(tensor.to_f32())
+    }
+
+    /// Loads a tensor from multiple TensorBuilders; used to load a tensor from multiple files
+    /// which is what the larger LLaMA models do.
+    pub fn load_from_pieces<P: AsRef<Path>>(
+        builders: &[Self],
+        data_dir: P,
+        direction: FromPiecesDirection,
+    ) -> Result<Tensor, TensorError> {
+        let data_dir: &Path = data_dir.as_ref();
+        if builders.is_empty() {
+            return Err(TensorError::TensorBuilderEmpty);
+        }
+
+        fn load_from_pieces_cols(
+            builders: &[TensorBuilder],
+            data_dir: &Path,
+        ) -> Result<Tensor, TensorError> {
+            let mut total_cols: i64 = 0;
+            let expected_rows: i64 = builders[0].rows;
+            let expected_dtype: TensorDType = builders[0].dtype;
+
+            // Do some checking before we attempt loading.
+            for builder in builders.iter() {
+                total_cols += builder.cols;
+                if builder.stride < 1 {
+                    return Err(TensorError::InvalidStride(builder.stride));
+                }
+                if builder.rows != expected_rows {
+                    return Err(TensorError::TensorBuilderRowsMismatch(
+                        builder.rows,
+                        expected_rows,
+                    ));
+                }
+                if builder.dtype != expected_dtype {
+                    return Err(TensorError::TensorBuilderDTypeMismatch(
+                        builder.dtype,
+                        expected_dtype,
+                    ));
+                }
+            }
+
+            let tensor =
+                unsafe { Tensor::uninitialized(expected_rows, total_cols, builders[0].dtype) };
+            let mut buf: Vec<u8> = vec![];
+            let mut col_offset = 0;
+            for (idx, builder) in builders.iter().enumerate() {
+                let path = data_dir
+                    .join(format!("consolidated.{:02}", idx))
+                    .join("data")
+                    .join(&builder.src_path);
+                buf.truncate(0);
+                buf.resize(builder.cols as usize * builder.dtype.bytes_per_item(), 0);
+                let mut f = std::fs::File::open(&path).unwrap();
+                f.seek(std::io::SeekFrom::Start(
+                    (builder.offset as u64) * builder.dtype.bytes_per_item() as u64,
+                ))?;
+                for row in 0..builder.rows {
+                    match f.read_exact(&mut buf) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            return Err(TensorError::TensorBuilderReadError(
+                                err,
+                                format!(
+                                    "path={:?} row={} expected_len={} offset={}",
+                                    path,
+                                    row,
+                                    buf.len(),
+                                    builder.offset
+                                ),
+                            ));
+                        }
+                    };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            buf.as_ptr(),
+                            tensor.data.add(
+                                ((row * tensor.capacity_cols + col_offset) as usize)
+                                    * builder.dtype.bytes_per_item(),
+                            ),
+                            buf.len(),
+                        );
+                    }
+                }
+                col_offset += builder.cols;
+            }
+            Ok(tensor.to_f32())
+        }
+
+        fn load_from_pieces_rows(
+            builders: &[TensorBuilder],
+            data_dir: &Path,
+        ) -> Result<Tensor, TensorError> {
+            let mut total_rows: i64 = 0;
+            let expected_cols: i64 = builders[0].cols;
+            let expected_dtype: TensorDType = builders[0].dtype;
+
+            // Do some checking before we attempt loading.
+            for builder in builders.iter() {
+                total_rows += builder.rows;
+                if builder.stride < 1 {
+                    return Err(TensorError::InvalidStride(builder.stride));
+                }
+                if builder.cols != expected_cols {
+                    return Err(TensorError::TensorBuilderRowsMismatch(
+                        builder.cols,
+                        expected_cols,
+                    ));
+                }
+                if builder.dtype != expected_dtype {
+                    return Err(TensorError::TensorBuilderDTypeMismatch(
+                        builder.dtype,
+                        expected_dtype,
+                    ));
+                }
+            }
+
+            let tensor =
+                unsafe { Tensor::uninitialized(total_rows, expected_cols, builders[0].dtype) };
+            let mut buf: Vec<u8> = vec![];
+            let mut row_offset: i64 = 0;
+            for (idx, builder) in builders.iter().enumerate() {
+                let path = data_dir
+                    .join(format!("consolidated.{:02}", idx))
+                    .join("data")
+                    .join(&builder.src_path);
+                buf.truncate(0);
+                buf.resize(builder.cols as usize * builder.dtype.bytes_per_item(), 0);
+                let mut f = std::fs::File::open(&path).unwrap();
+                f.seek(std::io::SeekFrom::Start(
+                    (builder.offset as u64) * builder.dtype.bytes_per_item() as u64,
+                ))?;
+                for row in 0..builder.rows {
+                    match f.read_exact(&mut buf) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            return Err(TensorError::TensorBuilderReadError(
+                                err,
+                                format!(
+                                    "path={:?} row={} expected_len={} offset={}",
+                                    path,
+                                    row,
+                                    buf.len(),
+                                    builder.offset
+                                ),
+                            ));
+                        }
+                    };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            buf.as_ptr(),
+                            tensor.data.add(
+                                (((row + row_offset) * tensor.capacity_cols) as usize)
+                                    * builder.dtype.bytes_per_item(),
+                            ),
+                            buf.len(),
+                        );
+                    }
+                }
+                row_offset += builder.rows;
+            }
+            Ok(tensor.to_f32())
+        }
+
+        match direction {
+            FromPiecesDirection::Rows => load_from_pieces_rows(builders, data_dir),
+            FromPiecesDirection::Cols => load_from_pieces_cols(builders, data_dir),
+        }
     }
 }
 

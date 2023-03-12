@@ -108,52 +108,9 @@ impl Value {
     fn to_tensor_builder2(&self, args: &[Value]) -> Option<TensorBuilder> {
         if args.len() == 6 {
             Self::to_tensor_builder2_6items(args)
-        } else if args.len() == 4 {
-            Self::to_tensor_builder2_4items(args)
         } else {
             None
         }
-    }
-
-    fn to_tensor_builder2_4items(args: &[Value]) -> Option<TensorBuilder> {
-        let storagev: &Value = args[0].get_persistent_id()?;
-        let storage_args: &[Value] = storagev.get_tuple()?;
-        let storage_mark: &str = storage_args[0].get_str()?;
-        if storage_mark != "storage" {
-            return None;
-        }
-
-        let (storage_module, storage_type) = storage_args[1].get_global()?;
-        if storage_module != "torch" {
-            return None;
-        }
-        let dtype: TensorDType = match storage_type {
-            "HalfStorage" => TensorDType::Float16,
-            _ => return None,
-        };
-        let storage_filename: &str = storage_args[2].get_str()?;
-        let nitems: i64 = storage_args[4].get_int64()?;
-
-        let offset: i64 = args[1].get_int64()?;
-        if offset != 0 {
-            return None;
-        }
-
-        let rows: i64 = 1;
-        let cols: i64 = nitems;
-        let row_stride: i64 = cols;
-        if row_stride != cols {
-            return None;
-        }
-
-        Some(TensorBuilder {
-            src_path: PathBuf::from(storage_filename),
-            dtype,
-            stride: row_stride,
-            rows,
-            cols,
-            nitems,
-        })
     }
 
     fn to_tensor_builder2_6items(args: &[Value]) -> Option<TensorBuilder> {
@@ -170,36 +127,52 @@ impl Value {
         }
         let dtype: TensorDType = match storage_type {
             "HalfStorage" => TensorDType::Float16,
-            _ => return None,
+            _ => {
+                println!("1");
+                return None;
+            }
         };
         let storage_filename: &str = storage_args[2].get_str()?;
         let nitems: i64 = storage_args[4].get_int64()?;
 
         let offset: i64 = args[1].get_int64()?;
-        if offset != 0 {
-            return None;
-        }
 
         let shape: &[Value] = args[2].get_tuple()?;
         let stride: &[Value] = args[3].get_tuple()?;
 
-        if shape.len() != 2 {
+        if shape.len() != 2 && shape.len() != 1 {
+            println!("2");
             return None;
         }
-        if stride.len() != 2 {
+        if stride.len() != 2 && stride.len() != 1 {
+            println!("3");
             return None;
         }
 
-        let rows: i64 = shape[0].get_int64()?;
-        let cols: i64 = shape[1].get_int64()?;
+        let (rows, cols) = if shape.len() == 2 {
+            (shape[0].get_int64()?, shape[1].get_int64()?)
+        } else {
+            let cols = shape[0].get_int64()?;
+            (1, cols)
+        };
 
-        let row_stride: i64 = stride[0].get_int64()?;
-        let col_stride: i64 = stride[1].get_int64()?;
+        let (row_stride, col_stride) = if stride.len() == 1 {
+            let (r, c) = (stride[0].get_int64()?, 1);
+            if r != 1 {
+                println!("4");
+                return None;
+            }
+            (r, c)
+        } else {
+            (stride[0].get_int64()?, stride[1].get_int64()?)
+        };
 
         if col_stride != 1 {
+            println!("5");
             return None;
         }
-        if row_stride != cols {
+        if row_stride != cols && stride.len() == 2 {
+            println!("6");
             return None;
         }
 
@@ -210,6 +183,7 @@ impl Value {
             rows,
             cols,
             nitems,
+            offset,
         })
 
         /* Args should look like this (took random example from debug print) :
@@ -529,6 +503,7 @@ pub fn unpickle(bytes: &[u8]) -> Result<Value, UnpicklingError> {
                 ));
             }
             tuple.push(stack.pop().unwrap());
+            stack.push(Value::Tuple(tuple));
             bytes = &bytes[1..];
             continue;
         }
@@ -602,6 +577,27 @@ pub fn unpickle(bytes: &[u8]) -> Result<Value, UnpicklingError> {
             }
             stack.push(dict);
             bytes = &bytes[1..];
+            continue;
+        }
+        if frame_opcode == 106 {
+            // long_binget
+            if bytes.len() < 5 {
+                return Err(UnpicklingError::UnpicklingError(
+                    "Unexpected end of data while handling LONG_BINGET".to_string(),
+                ));
+            }
+            let idx = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+            match memo.get(&(idx as u32)) {
+                None => {
+                    return Err(UnpicklingError::UnpicklingError(
+                        "LONG_BINGET index out of range".to_string(),
+                    ));
+                }
+                Some(memo_value) => {
+                    stack.push(memo_value.clone());
+                }
+            }
+            bytes = &bytes[5..];
             continue;
         }
         if frame_opcode == 46 {

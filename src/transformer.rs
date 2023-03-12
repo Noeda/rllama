@@ -1,5 +1,5 @@
 use crate::embedding::Embedding;
-use crate::tensor::{Tensor, TensorDType};
+use crate::tensor::{FromPiecesDirection, Tensor, TensorDType};
 use crate::tokenizer::TokenId;
 use crate::unpickler;
 use crate::unpickler::UnpicklingError;
@@ -114,7 +114,7 @@ pub struct FeedForward {
 impl Transformer {
     #[allow(clippy::too_many_arguments)]
     pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &unpickler::Value,
+        unpickled: &[unpickler::Value],
         emb: Embedding,
         dim: usize,
         n_layers: usize,
@@ -150,7 +150,13 @@ impl Transformer {
         std::mem::drop(progress_bar);
 
         let norm = RMSNorm::from_unpickled(unpickled, "norm.weight".to_string(), eps, data_dir)?;
-        let output = Tensor::from_unpickled(unpickled, "output.weight", data_dir)?.to_f32();
+        let output = Tensor::from_unpickled_pieces(
+            unpickled,
+            "output.weight",
+            data_dir,
+            FromPiecesDirection::Rows,
+        )?
+        .to_f32();
 
         Ok(Transformer {
             freqs_cis: compute_freqs_cis(dim / n_heads, max_seq_len, 10000.0),
@@ -227,7 +233,7 @@ impl Transformer {
 
 impl TransformerBlock {
     pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &unpickler::Value,
+        unpickled: &[unpickler::Value],
         layer_id: usize,
         eps: f64,
         n_local_heads: usize,
@@ -279,13 +285,19 @@ impl TransformerBlock {
 
 impl RMSNorm {
     pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &unpickler::Value,
+        unpickled: &[unpickler::Value],
         name: String,
         eps: f64,
         data_dir: P,
     ) -> Result<RMSNorm, UnpicklingError> {
         let data_dir: &Path = data_dir.as_ref();
-        let weights = Tensor::from_unpickled(unpickled, name, data_dir)?.to_f32();
+        let weights = Tensor::from_unpickled_pieces(
+            &unpickled[0..=0],
+            name.clone(),
+            data_dir,
+            FromPiecesDirection::Rows,
+        )?
+        .to_f32();
         Ok(Self {
             eps,
             weight: weights,
@@ -301,28 +313,31 @@ impl RMSNorm {
 
 impl FeedForward {
     pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &unpickler::Value,
+        unpickled: &[unpickler::Value],
         layer_id: usize,
         data_dir: P,
     ) -> Result<FeedForward, UnpicklingError> {
         let data_dir: &Path = data_dir.as_ref();
 
-        let w1 = Tensor::from_unpickled(
+        let w1 = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.feed_forward.w1.weight", layer_id),
             data_dir,
+            FromPiecesDirection::Rows,
         )?
         .to_f32();
-        let w2 = Tensor::from_unpickled(
+        let w2 = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.feed_forward.w2.weight", layer_id),
             data_dir,
+            FromPiecesDirection::Cols,
         )?
         .to_f32();
-        let w3 = Tensor::from_unpickled(
+        let w3 = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.feed_forward.w3.weight", layer_id),
             data_dir,
+            FromPiecesDirection::Rows,
         )?
         .to_f32();
 
@@ -348,7 +363,7 @@ impl FeedForward {
 
 impl Attention {
     pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &unpickler::Value,
+        unpickled: &[unpickler::Value],
         layer_id: usize,
         n_local_heads: usize,
         head_dim: usize,
@@ -356,28 +371,32 @@ impl Attention {
     ) -> Result<Attention, UnpicklingError> {
         let data_dir: &Path = data_dir.as_ref();
 
-        let wq = Tensor::from_unpickled(
+        let wq = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.attention.wq.weight", layer_id),
             data_dir,
+            FromPiecesDirection::Rows,
         )?
         .to_f32();
-        let wk = Tensor::from_unpickled(
+        let wk = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.attention.wk.weight", layer_id),
             data_dir,
+            FromPiecesDirection::Rows,
         )?
         .to_f32();
-        let wv = Tensor::from_unpickled(
+        let wv = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.attention.wv.weight", layer_id),
             data_dir,
+            FromPiecesDirection::Rows,
         )?
         .to_f32();
-        let wo = Tensor::from_unpickled(
+        let wo = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.attention.wo.weight", layer_id),
             data_dir,
+            FromPiecesDirection::Cols,
         )?
         .to_f32();
 
@@ -494,7 +513,7 @@ impl Attention {
                     concat_vec.push(output.row(idx));
                 }
                 let concat_vec2: Vec<&Tensor> = concat_vec.iter().collect();
-                let xq_row = Tensor::concat(&concat_vec2).view(1, 4096);
+                let xq_row = Tensor::concat(&concat_vec2).view(1, self.wo.rows());
                 xq_row.matrix_mul_transposed(&self.wo)
             })
             .collect();
