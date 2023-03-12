@@ -11,7 +11,11 @@ figured out how to multithread this.
 I've also managed to run LLaMA-13B which just barely fits in my 64-gig machine
 with 32-bit float weights everywhere.
 
-I have not tried the bigger models yet.
+LLaMA-30B technically runs but my computer does not have enough memory to keep
+all the weights around so generating a token takes minutes.
+
+I have not tried LLaMA-60B but presumably if all the smaller models work it
+would run given a sufficiently chonky computer.
 
 This uses AVX2 intrinsics to speed up itself. Therefore, you need an x86-family
 CPU to run this.
@@ -32,7 +36,8 @@ decompress it.
 $ cd LLaMA
 $ cd 7B
 $ unzip consolidated.00.pth
-# Only necessary for LLaMA-7B, rllama currently expected .00, .01, .02 etc.in directories
+# For LLaMA-7B, rename consolidated to consolidated.00
+# For the larger models, the number is there already so no need to do this step.
 $ mv consolidated consolidated.00
 ```
 
@@ -51,3 +56,6 @@ settings.
 # Future plans
 
 This is a hobby thing for me so don't expect updates or help.
+
+* Some other CPU implementations use quantization to reduce the size of weights
+* Put some of the operations on the OpenCL GPU
