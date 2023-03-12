@@ -1,8 +1,23 @@
 extern crate rllama;
+#[cfg(feature = "opencl")]
+use rllama::tensor_opencl_support::OpenCL;
 
 use rllama::tensor::{Tensor, TensorDType};
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+#[cfg(feature = "opencl")]
+pub fn opencl_benchmarks(c: &mut Criterion) {
+    let orig16 = Tensor::random(1024, 1024, TensorDType::Float16);
+    let cl = OpenCL::new(false, 0).unwrap();
+
+    c.bench_function("1024x1024 matrix from CPU to OpenCL device", |b| {
+        b.iter(|| {
+            let mut orig16 = orig16.clone();
+            let _ = orig16.to_gpu(&cl);
+        })
+    });
+}
 
 pub fn tensor_benchmarks(c: &mut Criterion) {
     let orig16_1 = Tensor::full(16, 32, TensorDType::Float16, 3.0);
@@ -96,5 +111,8 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     });
 }
 
+#[cfg(feature = "opencl")]
+criterion_group!(benches, opencl_benchmarks, tensor_benchmarks);
+#[cfg(not(feature = "opencl"))]
 criterion_group!(benches, tensor_benchmarks);
 criterion_main!(benches);

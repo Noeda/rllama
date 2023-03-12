@@ -1,4 +1,6 @@
 use crate::embedding::Embedding;
+#[cfg(feature = "opencl")]
+use crate::tensor_opencl_support::OpenCL;
 use crate::token_sampler::TokenSampler;
 use crate::tokenizer::{TokenId, Tokenizer};
 use crate::transformer::Transformer;
@@ -34,6 +36,9 @@ struct Cli {
     top_p: Option<f32>,
     #[arg(long)]
     top_k: Option<i32>,
+
+    #[cfg(feature = "opencl")]
+    opencl_device: Option<usize>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -56,6 +61,21 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !colored::control::SHOULD_COLORIZE.should_colorize() {
         be_quiet = true;
     }
+
+    #[cfg(feature = "opencl")]
+    let opencl: Option<OpenCL> = {
+        let opencl_device = cli.opencl_device.unwrap_or(0);
+        match OpenCL::new(!be_quiet, opencl_device) {
+            Err(openclerr) => {
+                eprintln!("OpenCL error: {}", openclerr);
+                None
+            }
+            Ok(opencl) => {
+                println!("OpenCL initialized.");
+                Some(opencl)
+            }
+        }
+    };
 
     // Custom println-like macro that respects be_quiet
     macro_rules! pln {
