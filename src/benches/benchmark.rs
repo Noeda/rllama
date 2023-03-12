@@ -19,6 +19,21 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     let orig_84096_2 = Tensor::zeros(4096, 4096, TensorDType::Float32);
     let mut result_84096 = Tensor::zeros(8, 4096, TensorDType::Float32);
 
+    let orig_f32 = Tensor::zeros(1024, 1024, TensorDType::Float32);
+    let orig_f16 = Tensor::zeros(1024, 1024, TensorDType::Float16);
+
+    c.bench_function("1024x1024 matrix from f32->f16", |b| {
+        b.iter(|| {
+            let _ = black_box(&orig_f32).to_f16();
+        })
+    });
+
+    c.bench_function("1024x1024 matrix from f16->f32", |b| {
+        b.iter(|| {
+            let _ = black_box(&orig_f16).to_f32();
+        })
+    });
+
     c.bench_function(
         "matrix multiplication 8x4096 @ 4096x4096 f32 in-place",
         |b| {
