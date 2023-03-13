@@ -67,3 +67,6 @@ This is a hobby thing for me so don't expect updates or help.
 * I've heard there is some thing called Tensor Cores on nVidia GPUs. Not
   accessible with OpenCL. But might be accessible on Vulkan with a an
   extension.
+* More sophisticated token sampling. I saw on Hackernews some comments how the
+  samplers are kinda garbage and you can get much better results with good
+  defaults and things like repetition penalty.
