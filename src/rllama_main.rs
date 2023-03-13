@@ -63,11 +63,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     #[cfg(feature = "opencl")]
-    let opencl: Option<OpenCL> = {
+    let _opencl: Option<OpenCL> = {
         let opencl_device = cli.opencl_device.unwrap_or(0);
         match OpenCL::new(!be_quiet, opencl_device) {
             Err(openclerr) => {
                 eprintln!("OpenCL error: {}", openclerr);
+                eprintln!("OpenCL is disabled because it failed to initialize.");
                 None
             }
             Ok(opencl) => {

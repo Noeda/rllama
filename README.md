@@ -25,7 +25,9 @@ PyTorch. Well almost, it doesn't unzip them automatically (see below).
 
 # How to run
 
-You will need Rust. Make sure you can run `cargo` from a command line.
+You will need Rust. Make sure you can run `cargo` from a command line. In
+particular, this is using unstable features so you need nightly rust. Make sure
+if you write `cargo --version` it is nightly.
 
 You will need to download LLaMA-7B weights. Refer to https://github.com/facebookresearch/llama/
 
@@ -58,4 +60,10 @@ settings.
 This is a hobby thing for me so don't expect updates or help.
 
 * Some other CPU implementations use quantization to reduce the size of weights
-* Put some of the operations on the OpenCL GPU
+* Put some of the operations on the OpenCL GPU/CPU. I've made some initial
+  OpenCL code but it is not used in the transformer loop yet. The CPU OpenCL
+  improves my own AVX2 code by like 100% and massively so on GPU although I am
+  also like 20x slower than equivalent operation on PyTorch on the same GPU.
+* I've heard there is some thing called Tensor Cores on nVidia GPUs. Not
+  accessible with OpenCL. But might be accessible on Vulkan with a an
+  extension.

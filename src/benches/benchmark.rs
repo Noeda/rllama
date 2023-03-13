@@ -13,11 +13,39 @@ pub fn opencl_benchmarks(c: &mut Criterion) {
     let mut orig32 = Tensor::random(4096, 4096, TensorDType::Float16);
     let cl = OpenCL::new(false, 0).unwrap();
 
+    let mut mul_left = Tensor::random(1024, 1024, TensorDType::Float16);
+    mul_left.to_gpu(&cl).unwrap();
+    let mut mul_right = Tensor::random(1024, 1024, TensorDType::Float16);
+    mul_right.to_gpu(&cl).unwrap();
+    let mut mul_target = Tensor::zeros(1024, 1024, TensorDType::Float16);
+    mul_target.to_gpu(&cl).unwrap();
+
+    let mut mul_left_cpu = Tensor::random(1024, 1024, TensorDType::Float32);
+    let mut mul_right_cpu = Tensor::random(1024, 1024, TensorDType::Float32);
+    let mut mul_target_cpu = Tensor::random(1024, 1024, TensorDType::Float32);
+
+    c.bench_function(
+        "1024x1024 matrix multiplication transposed on OpenCL",
+        |b| {
+            b.iter(|| {
+                mul_target
+                    .matrix_mul_inplace_transposed(black_box(&mul_left), black_box(&mul_right));
+                mul_target.finish();
+            })
+        },
+    );
+
+    c.bench_function("1024x1024 matrix multiplication transposed on CPU", |b| {
+        b.iter(|| {
+            let _ = mul_target_cpu.matrix_mul_inplace_transposed(&mul_left_cpu, &mul_right_cpu);
+        })
+    });
+
     c.bench_function("1x1 matrix from CPU to OpenCL device and back", |b| {
         b.iter(|| {
             let _ = orig1.to_gpu(&cl).unwrap();
             let _ = orig1.to_cpu();
-            orig1.process_waiting_for_data();
+            orig1.finish();
         })
     });
 
@@ -25,7 +53,7 @@ pub fn opencl_benchmarks(c: &mut Criterion) {
         b.iter(|| {
             let _ = orig16.to_gpu(&cl).unwrap();
             let _ = orig16.to_cpu();
-            orig16.process_waiting_for_data();
+            orig16.finish();
         })
     });
 
@@ -33,7 +61,7 @@ pub fn opencl_benchmarks(c: &mut Criterion) {
         b.iter(|| {
             let _ = orig32.to_gpu(&cl).unwrap();
             let _ = orig32.to_cpu();
-            orig32.process_waiting_for_data();
+            orig32.finish();
         })
     });
 }
