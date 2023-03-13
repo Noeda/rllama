@@ -70,3 +70,7 @@ This is a hobby thing for me so don't expect updates or help.
 * More sophisticated token sampling. I saw on Hackernews some comments how the
   samplers are kinda garbage and you can get much better results with good
   defaults and things like repetition penalty.
+* There is an initial start-up time as the program has to pass through the
+  initial prompt. I don't know if this start-up time can be eliminated
+  completely but it could be cached on disk. Use cases like having a standard
+  prompt to prime the text generation that you reuse many times.
