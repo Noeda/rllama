@@ -74,3 +74,21 @@ This is a hobby thing for me so don't expect updates or help.
   initial prompt. I don't know if this start-up time can be eliminated
   completely but it could be cached on disk. Use cases like having a standard
   prompt to prime the text generation that you reuse many times.
+
+# Benchmarks
+
+I'm trying to track that I'm making this faster and not slower.
+
+For 50-length sequence generation:
+
+```
+cargo run --release --
+          --model-path /LLaMA/13B \
+          --param-path /LLaMA/13B/params.json \
+          --tokenizer-path /LLaMA/tokenizer.model \
+          --prompt "Computers are pretty complica" --max-seq-len 50
+
+# commit c9c861d199bd2d87d7e883e3087661c1e287f6c4  (13 March 2023)
+LLaMA-7B:  AMD Ryzen 3950X: 1058ms / token
+LLaMA-13B: AMD Ryzen 3950X: 2005ms / token
+```
