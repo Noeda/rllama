@@ -50,7 +50,8 @@ cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /
 ```
 
 Right now it seems to use around ~25 gigabytes of memory for 7B and around ~50
-gigabytes for 13B. Internally all weights are cast to 32-bit floats.
+gigabytes for 13B. If you don't use OpenCL, then all parameters are cast to
+32-bit floats.
 
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.
