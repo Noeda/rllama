@@ -91,4 +91,11 @@ cargo run --release --
 # commit c9c861d199bd2d87d7e883e3087661c1e287f6c4  (13 March 2023)
 LLaMA-7B:  AMD Ryzen 3950X: 1058ms / token
 LLaMA-13B: AMD Ryzen 3950X: 2005ms / token
+
+# commit 63d27dba9091823f8ba11a270ab5790d6f597311  (13 March 2023)
+# This one has one part of the transformer moved to GPU as a type of smoke test
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  567ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  956ms / token
+LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  987ms / token
+LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1706ms / token
 ```
