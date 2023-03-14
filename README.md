@@ -56,6 +56,19 @@ cast to 32-bit floats.
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.
 
+# How to turn on OpenCL
+
+Use `opencl` Cargo feature.
+
+```
+cargo run --release --features opencl -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B --param-path /path/to/LLaMA/7B/params.json --prompt "The meaning of life is"
+```
+
+With `opencl` feature, there is also another argument, `--opencl-device` that
+takes a number. That number selects Nth OpenCL device found on the system. You
+can see the devices in the output when you run the program (e.g. see the
+screenshot below).
+
 # Screenshot
 
 ![Screenshot of RLLaMA in action](rllama.png)
