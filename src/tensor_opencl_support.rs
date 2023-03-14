@@ -12,9 +12,15 @@ use thiserror::Error;
 struct Programs {
     matrix_mul_transposed_by_row_f16_program: Program,
     matrix_mul_transposed_by_row_f16: Kernel,
+    silu_f16_program: Program,
+    silu_f16: Kernel,
+    hadamard_product_f16_program: Program,
+    hadamard_product_f16: Kernel,
+    transpose_f16_program: Program,
+    transpose_f16: Kernel,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct OpenCL {
     ctx: Context,
@@ -34,7 +40,7 @@ pub struct OpenCLTensor {
     cols: i64,
     cols_capacity: i64,
     queue: Queue,
-    programs: Arc<RwLock<Programs>>,
+    cl: OpenCL,
 }
 
 #[derive(Debug)]
@@ -143,13 +149,17 @@ impl OpenCL {
                 cols,
                 cols_capacity,
                 queue: self.queue.clone(),
-                programs: self.programs.clone(),
+                cl: self.clone(),
             })
         }
     }
 }
 
 impl OpenCLTensor {
+    pub fn cl(&self) -> OpenCL {
+        self.cl.clone()
+    }
+
     pub fn wait_until_ready(&mut self) {
         if self.last_event.is_some() {
             self.last_event.as_ref().unwrap().wait_for().unwrap();
@@ -187,6 +197,93 @@ impl OpenCLTensor {
         }
     }
 
+    /// Copies all values from another tensor
+    pub fn copy_inplace(&mut self, other: &OpenCLTensor) -> Result<OpenCLEvent, OpenCLError> {
+        if other.rows != self.rows || other.cols != self.cols {
+            panic!(
+                "Cannot in-place copy tensors of different sizes: {}x{} <-- {}x{}",
+                self.rows, self.cols, other.rows, other.cols
+            );
+        }
+        let mut event = Event::empty();
+        other
+            .buf
+            .cmd()
+            .queue(&other.queue)
+            .copy(&self.buf, None, None)
+            .enew(&mut event)
+            .enq()?;
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn transpose_from(&mut self, other: &OpenCLTensor) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.transpose_f16.set_arg(0, self.buf.clone()).unwrap();
+        prg.transpose_f16.set_arg(1, other.buf.clone()).unwrap();
+        prg.transpose_f16
+            .set_arg(2, self.cols_capacity as i32)
+            .unwrap();
+        prg.transpose_f16
+            .set_arg(3, other.cols_capacity as i32)
+            .unwrap();
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .transpose_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, self.cols as usize])
+                .enew(&mut event);
+            b.enq().unwrap();
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn hadamard_product_inplace(
+        &mut self,
+        other: &OpenCLTensor,
+    ) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.hadamard_product_f16.set_arg(0, self.buf.clone())?;
+        prg.hadamard_product_f16.set_arg(1, other.buf.clone())?;
+        prg.hadamard_product_f16
+            .set_arg(2, self.cols_capacity as i32)?;
+        prg.hadamard_product_f16
+            .set_arg(3, other.cols_capacity as i32)?;
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .hadamard_product_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, self.cols as usize])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn silu_inplace(&mut self) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.silu_f16.set_arg(0, self.buf.clone())?;
+        prg.silu_f16.set_arg(1, self.cols_capacity as i32)?;
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .silu_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, self.cols as usize])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
     pub fn matrix_mul_inplace_transposed(
         &mut self,
         src: &OpenCLTensor,
@@ -208,7 +305,7 @@ impl OpenCLTensor {
         // Clear out the target memory
         unsafe { self.buf.cmd().fill(0u16, None).block(false).enq()? };
 
-        let prg = self.programs.write().unwrap();
+        let prg = self.cl.programs.write().unwrap();
         prg.matrix_mul_transposed_by_row_f16
             .set_arg(0, self.buf.clone())?;
         prg.matrix_mul_transposed_by_row_f16
@@ -234,7 +331,7 @@ impl OpenCLTensor {
                 .matrix_mul_transposed_by_row_f16
                 .cmd()
                 .queue(&self.queue)
-                .global_work_size([self.rows as usize, self.cols_capacity as usize])
+                .global_work_size([self.rows as usize, self.cols as usize])
                 .enew(&mut event);
             b.enq()?;
         }
@@ -251,47 +348,65 @@ impl OpenCLEvent {
 }
 
 fn make_programs(ctx: &Context, queue: &Queue) -> Result<Programs, OpenCLError> {
-    let mut last_err: Option<OpenCLError> = None;
-    // There used to be more sources here but now it's just one. This can go through programs and
-    // accept first one that compiles
-    for src in &[MATRIX_MUL_TRANSPOSED_BY_ROW_F16_SRC] {
-        fn make_programs_with_src(
-            ctx: &Context,
-            queue: &Queue,
-            src: &str,
-        ) -> Result<Programs, OpenCLError> {
-            let program = Program::builder().src(src).build(&ctx)?;
-            let kernel = Kernel::builder()
-                .program(&program)
-                .name("matrix_mul_transposed_by_row_f16")
-                .arg(None::<&Buffer<u16>>)
-                .arg(None::<&Buffer<u16>>)
-                .arg(None::<&Buffer<u16>>)
-                .arg(&0)
-                .arg(&0)
-                .arg(&0)
-                .arg(&0)
-                .arg(&0)
-                .arg(&0)
-                .queue(queue.clone())
-                .build()?;
-            Ok(Programs {
-                matrix_mul_transposed_by_row_f16_program: program,
-                matrix_mul_transposed_by_row_f16: kernel,
-            })
-        }
-        match make_programs_with_src(ctx, queue, src) {
-            Err(e) => {
-                last_err = Some(e);
-                continue;
-            }
-            Ok(p) => return Ok(p),
-        }
+    fn make_program_with_src(ctx: &Context, src: &str) -> Result<Program, OpenCLError> {
+        let program = Program::builder().src(src).build(&ctx)?;
+        Ok(program)
     }
-    if last_err.is_none() {
-        unreachable!();
-    }
-    Err(last_err.unwrap())
+
+    let matrix_mul_transposed_by_row_f16_program =
+        make_program_with_src(ctx, MATRIX_MUL_TRANSPOSED_BY_ROW_F16_SRC)?;
+    let matrix_mul_transposed_by_row_f16 = Kernel::builder()
+        .program(&matrix_mul_transposed_by_row_f16_program)
+        .name("matrix_mul_transposed_by_row_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let silu_f16_program = make_program_with_src(ctx, SILU_F16_SRC)?;
+    let silu_f16 = Kernel::builder()
+        .program(&silu_f16_program)
+        .name("silu_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let hadamard_product_f16_program = make_program_with_src(ctx, HADAMARD_PRODUCT_F16_SRC)?;
+    let hadamard_product_f16 = Kernel::builder()
+        .program(&hadamard_product_f16_program)
+        .name("hadamard_product_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let transpose_f16_program = make_program_with_src(ctx, TRANSPOSE_F16_SRC)?;
+    let transpose_f16 = Kernel::builder()
+        .program(&transpose_f16_program)
+        .name("transpose_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    Ok(Programs {
+        matrix_mul_transposed_by_row_f16_program,
+        matrix_mul_transposed_by_row_f16,
+        silu_f16_program,
+        silu_f16,
+        hadamard_product_f16_program,
+        hadamard_product_f16,
+        transpose_f16_program,
+        transpose_f16,
+    })
 }
 
 const MATRIX_MUL_TRANSPOSED_BY_ROW_F16_SRC: &str = r#"
@@ -365,5 +480,55 @@ __kernel void matrix_mul_transposed_by_row_f16(
     float total = sum21 + sum22;
 
     vstore_half(total, 0, (__global half*) &tgt[tgt_row * ncols_capacity + tgt_col]);
+}
+"#;
+
+/// Computes SILU for every f16 value in the tensor
+const SILU_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void silu_f16(__global half *tgt,
+                       const int ncols_capacity)
+{
+    const int tgt_row = get_global_id(0);
+    const int tgt_col = get_global_id(1);
+    const float val = vload_half(tgt_row * ncols_capacity + tgt_col, (__global const half*) tgt);
+    const float result = val * (1.0 / (1.0 + exp(-val)));
+    vstore_half(result, tgt_row * ncols_capacity + tgt_col, (__global half*) tgt);
+}
+"#;
+
+/// Computes hadamard product of two identially sized tensors
+const HADAMARD_PRODUCT_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void hadamard_product_f16(__global half *tgt,
+                                   __global const half *left,
+                                   const int ncols_capacity,
+                                   const int left_cols_capacity) {
+    const int tgt_row = get_global_id(0);
+    const int tgt_col = get_global_id(1);
+    const float tgt_value = vload_half(tgt_row * ncols_capacity + tgt_col, (__global const half*) tgt);
+    const float left_value = vload_half(tgt_row * left_cols_capacity + tgt_col, (__global const half*) left);
+    const float result = tgt_value * left_value;
+    vstore_half(result, tgt_row * ncols_capacity + tgt_col, (__global half*) tgt);
+}
+"#;
+
+/// Computes the transpose of a matrix
+const TRANSPOSE_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void transpose_f16(__global half *tgt,
+                            __global const half *left,
+                            const int ncols_capacity,
+                            const int left_cols_capacity)
+{
+    const int tgt_row = get_global_id(0);
+    const int tgt_col = get_global_id(1);
+    const int src_row = tgt_col;
+    const int src_col = tgt_row;
+    const float val = vload_half(src_row * left_cols_capacity + src_col, (__global const half*) left);
+    vstore_half(val, tgt_row * ncols_capacity + tgt_col, (__global half*) tgt);
 }
 "#;

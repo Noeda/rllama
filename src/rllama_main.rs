@@ -3,7 +3,7 @@ use crate::embedding::Embedding;
 use crate::tensor_opencl_support::OpenCL;
 use crate::token_sampler::TokenSampler;
 use crate::tokenizer::{TokenId, Tokenizer};
-use crate::transformer::Transformer;
+use crate::transformer::{DataSettings, Transformer};
 use crate::unpickler;
 use crate::unpickler::Value;
 use clap::Parser;
@@ -38,6 +38,7 @@ struct Cli {
     top_k: Option<i32>,
 
     #[cfg(feature = "opencl")]
+    #[arg(long)]
     opencl_device: Option<usize>,
 }
 
@@ -63,7 +64,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     #[cfg(feature = "opencl")]
-    let _opencl: Option<OpenCL> = {
+    let opencl: Option<OpenCL> = {
         let opencl_device = cli.opencl_device.unwrap_or(0);
         match OpenCL::new(!be_quiet, opencl_device) {
             Err(openclerr) => {
@@ -154,6 +155,20 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => 1024,
     };
 
+    let data_settings = {
+        #[cfg(feature = "opencl")]
+        {
+            if let Some(opencl) = opencl {
+                let ds = DataSettings::new(Some(opencl));
+                ds.use_opencl()
+            } else {
+                DataSettings::new(None)
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        DataSettings::new()
+    };
+
     pln!("Loading transformer weights from {}...", model_path);
     let tr = Transformer::from_unpickled(
         &unpickle_results,
@@ -163,6 +178,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.n_heads,
         max_seq_len,
         params.norm_eps,
+        data_settings,
         model_path,
     )?;
     pln!("All is loaded. Starting inference.");

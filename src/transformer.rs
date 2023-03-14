@@ -1,5 +1,7 @@
 use crate::embedding::Embedding;
 use crate::tensor::{FromPiecesDirection, Tensor, TensorDType};
+#[cfg(feature = "opencl")]
+use crate::tensor_opencl_support::OpenCL;
 use crate::tokenizer::TokenId;
 use crate::unpickler;
 use crate::unpickler::UnpicklingError;
@@ -26,6 +28,43 @@ pub struct Transformer {
     output: Tensor,
 
     layers: Vec<TransformerBlock>,
+}
+
+// Clone is cheap
+#[derive(Clone)]
+pub struct DataSettings {
+    #[cfg(feature = "opencl")]
+    use_opencl_for_feedforward: bool,
+    #[cfg(feature = "opencl")]
+    cl: Option<OpenCL>,
+}
+
+// OpenCL is safe to send to threads but Rust doesn't know that
+unsafe impl Send for DataSettings {}
+unsafe impl Sync for DataSettings {}
+
+impl DataSettings {
+    #[cfg(feature = "opencl")]
+    pub fn new(cl: Option<OpenCL>) -> Self {
+        DataSettings {
+            use_opencl_for_feedforward: false,
+            cl: cl.clone(),
+        }
+    }
+
+    #[cfg(not(feature = "opencl"))]
+    pub fn new() -> Self {
+        DataSettings {}
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn use_opencl(mut self) -> DataSettings {
+        if self.cl.is_none() {
+            panic!("OpenCL is not available, cannot call use_opencl() on DataSettings.");
+        }
+        self.use_opencl_for_feedforward = true;
+        self
+    }
 }
 
 pub struct TransformerCaches {
@@ -105,10 +144,12 @@ pub struct Attention {
     head_dim: usize,
 }
 
+#[allow(dead_code)]
 pub struct FeedForward {
     w1: Tensor,
     w2: Tensor,
     w3: Tensor,
+    data_settings: DataSettings,
 }
 
 impl Transformer {
@@ -121,6 +162,7 @@ impl Transformer {
         n_heads: usize,
         max_seq_len: usize,
         eps: f64,
+        data_settings: DataSettings,
         data_dir: P,
     ) -> Result<Transformer, UnpicklingError> {
         assert_eq!(dim % n_heads, 0);
@@ -141,6 +183,7 @@ impl Transformer {
                     eps,
                     n_local_heads,
                     head_dim,
+                    data_settings.clone(),
                     data_dir,
                 );
                 progress_bar.inc(1);
@@ -238,10 +281,11 @@ impl TransformerBlock {
         eps: f64,
         n_local_heads: usize,
         head_dim: usize,
+        data_settings: DataSettings,
         data_dir: P,
     ) -> Result<Self, UnpicklingError> {
         let data_dir: &Path = data_dir.as_ref();
-        let ff = FeedForward::from_unpickled(unpickled, layer_id, data_dir)?;
+        let ff = FeedForward::from_unpickled(unpickled, layer_id, data_dir, data_settings)?;
         let attn =
             Attention::from_unpickled(unpickled, layer_id, n_local_heads, head_dim, data_dir)?;
         let ffn_norm = RMSNorm::from_unpickled(
@@ -277,8 +321,8 @@ impl TransformerBlock {
             .attn
             .forward(&attnorm_out, start_pos, freqs_cis, mask, attention_cache);
         let h = x.add(&att_out);
-        let att_out = self.ffn_norm.forward(&h);
-        let att_out = self.feed_forward.forward(&att_out).transpose();
+        let mut att_out = self.ffn_norm.forward(&h);
+        let att_out = self.feed_forward.forward(&mut att_out).transpose();
         h.add(&att_out)
     }
 }
@@ -316,35 +360,70 @@ impl FeedForward {
         unpickled: &[unpickler::Value],
         layer_id: usize,
         data_dir: P,
+        data_settings: DataSettings,
     ) -> Result<FeedForward, UnpicklingError> {
         let data_dir: &Path = data_dir.as_ref();
 
-        let w1 = Tensor::from_unpickled_pieces(
+        let mut w1 = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.feed_forward.w1.weight", layer_id),
             data_dir,
             FromPiecesDirection::Rows,
-        )?
-        .to_f32();
-        let w2 = Tensor::from_unpickled_pieces(
+        )?;
+        let mut w2 = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.feed_forward.w2.weight", layer_id),
             data_dir,
             FromPiecesDirection::Cols,
-        )?
-        .to_f32();
-        let w3 = Tensor::from_unpickled_pieces(
+        )?;
+        let mut w3 = Tensor::from_unpickled_pieces(
             unpickled,
             format!("layers.{}.feed_forward.w3.weight", layer_id),
             data_dir,
             FromPiecesDirection::Rows,
-        )?
-        .to_f32();
+        )?;
 
-        Ok(Self { w1, w2, w3 })
+        #[cfg(feature = "opencl")]
+        {
+            if data_settings.use_opencl_for_feedforward {
+                w1 = w1.to_f16();
+                w2 = w2.to_f16();
+                w3 = w3.to_f16();
+                let ds = data_settings.clone();
+                w1.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
+                w2.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
+                w3.to_gpu(&ds.cl.unwrap()).unwrap();
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            w1 = w1.to_f32();
+            w2 = w2.to_f32();
+            w3 = w3.to_f32();
+        }
+
+        Ok(Self {
+            w1,
+            w2,
+            w3,
+            data_settings,
+        })
     }
 
-    pub fn forward(&self, x: &Tensor) -> Tensor {
+    pub fn forward(&self, x: &mut Tensor) -> Tensor {
+        #[cfg(feature = "opencl")]
+        let x_was_on_cpu: bool;
+        #[cfg(feature = "opencl")]
+        {
+            x_was_on_cpu = x.is_on_cpu();
+        }
+        #[cfg(feature = "opencl")]
+        {
+            if self.data_settings.use_opencl_for_feedforward {
+                *x = x.to_f16();
+                x.to_gpu(self.data_settings.cl.as_ref().unwrap()).unwrap();
+            }
+        }
         let (w1_out, w3_out) = rayon::join(
             || self.w1.matrix_mul_transposed(x),
             || self.w3.matrix_mul_transposed(x),
@@ -352,12 +431,24 @@ impl FeedForward {
         let w1_out = w1_out.silu();
         let w1w3_out = w1_out.hadamard_product(&w3_out).transpose();
 
+        #[cfg(not(feature = "opencl"))]
         if w1w3_out.rows() == 1 {
             return self
                 .w2
                 .matrix_vector_mul_transposed_multithreaded(&w1w3_out);
+        } else {
+            return self.w2.matrix_mul_transposed(&w1w3_out);
         }
-        self.w2.matrix_mul_transposed(&w1w3_out)
+        #[cfg(feature = "opencl")]
+        {
+            let mut result = self.w2.matrix_mul_transposed(&w1w3_out);
+            if x_was_on_cpu {
+                result.to_cpu().unwrap();
+                result
+            } else {
+                result
+            }
+        }
     }
 }
 

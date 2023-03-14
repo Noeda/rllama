@@ -152,6 +152,18 @@ fn horizontal_sum(mut ymm: __m256) -> f32 {
 
 impl Tensor {
     #[inline]
+    pub fn assume_on_gpu(&self) {
+        #[cfg(feature = "opencl")]
+        {
+            self.process_waiting_for_data();
+            let od = self.opencl_data.read().unwrap();
+            if !od.is_some() {
+                panic!("Tried to assume_on_gpu on a tensor that is on the CPU");
+            }
+        }
+    }
+
+    #[inline]
     pub fn assume_on_cpu(&self) {
         #[cfg(feature = "opencl")]
         {
@@ -544,14 +556,52 @@ impl Tensor {
     }
 
     pub fn hadamard_product(&self, other: &Tensor) -> Tensor {
-        self.assume_on_cpu();
-        other.assume_on_cpu();
         if self.cols != other.cols || self.rows != other.rows {
             panic!(
                 "Invalid hadamard product: incompatible shapes, {}x{} vs {}x{}",
                 self.rows, self.cols, other.rows, other.cols
             );
         }
+        #[cfg(feature = "opencl")]
+        {
+            if self.is_on_gpu() {
+                self.hadamard_product_gpu(other)
+            } else {
+                self.hadamard_product_cpu(other)
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            self.hadamard_product_cpu(other)
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    fn hadamard_product_gpu(&self, other: &Tensor) -> Tensor {
+        // Assume: sizes have been checked already
+        self.assume_on_gpu();
+        other.assume_on_gpu();
+
+        self.with_opencl_data(|self_tensor| {
+            let cl = self_tensor.cl();
+            // TODO: do not create a CPU-side copy
+            let result = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
+            let mut result = result.to_f16();
+            result.to_gpu(&cl).unwrap();
+            result.with_opencl_data_mut(|tgt_tensor| {
+                tgt_tensor.copy_inplace(self_tensor).unwrap();
+                other.with_opencl_data(|other_tensor| {
+                    tgt_tensor.hadamard_product_inplace(other_tensor).unwrap();
+                });
+            });
+            result
+        })
+    }
+
+    fn hadamard_product_cpu(&self, other: &Tensor) -> Tensor {
+        // Assume: sizes have been checked already
+        self.assume_on_cpu();
+        other.assume_on_cpu();
         let mut result = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
         for row in 0..self.rows {
             for col in 0..self.cols {
@@ -595,7 +645,60 @@ impl Tensor {
     }
 
     pub fn silu(&self) -> Tensor {
-        self.assume_on_cpu();
+        #[cfg(feature = "opencl")]
+        {
+            if self.is_on_gpu() {
+                self.silu_gpu()
+            } else {
+                self.silu_cpu()
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            self.silu_cpu()
+        }
+    }
+
+    // with_opencl_data & with_opencl_data_mut are utilities to get access to the underlying
+    // OpenCLTensor, if the tensor is on gpu. Panics if they are not on GPU.
+    #[cfg(feature = "opencl")]
+    fn with_opencl_data<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&OpenCLTensor) -> R,
+    {
+        let opencl_data = self.opencl_data.read().unwrap();
+        let opencl_data = opencl_data.as_ref();
+        f(opencl_data.unwrap())
+    }
+
+    #[cfg(feature = "opencl")]
+    fn with_opencl_data_mut<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut OpenCLTensor) -> R,
+    {
+        let mut opencl_data = self.opencl_data.write().unwrap();
+        let opencl_data = opencl_data.as_mut();
+        f(opencl_data.unwrap())
+    }
+
+    #[cfg(feature = "opencl")]
+    fn silu_gpu(&self) -> Tensor {
+        self.assume_on_gpu();
+        self.with_opencl_data(|src_tensor| {
+            let cl: OpenCL = src_tensor.cl();
+            // TODO: don't generate a CPU-side copy, create the result directly on OpenCL side
+            let mut result = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
+            result = result.to_f16();
+            result.to_gpu(&cl).unwrap();
+            result.with_opencl_data_mut(|tgt_tensor| {
+                tgt_tensor.copy_inplace(src_tensor).unwrap();
+                tgt_tensor.silu_inplace().unwrap();
+            });
+            result
+        })
+    }
+
+    fn silu_cpu(&self) -> Tensor {
         let mut result = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
         for row in 0..self.rows {
             for col in 0..self.cols {
@@ -608,6 +711,37 @@ impl Tensor {
     }
 
     pub fn transpose(&self) -> Tensor {
+        #[cfg(feature = "opencl")]
+        {
+            if self.is_on_gpu() {
+                self.transpose_gpu()
+            } else {
+                self.transpose_cpu()
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            self.transpose_cpu()
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    fn transpose_gpu(&self) -> Tensor {
+        self.assume_on_gpu();
+        self.with_opencl_data(|src_tensor| {
+            let cl: OpenCL = src_tensor.cl();
+            // TODO: don't generate a CPU-side copy, create the result directly on OpenCL side
+            let mut result = unsafe { Tensor::uninitialized(self.cols, self.rows, self.dtype) };
+            result = result.to_f16();
+            result.to_gpu(&cl).unwrap();
+            result.with_opencl_data_mut(|tgt_tensor| {
+                tgt_tensor.transpose_from(src_tensor).unwrap();
+            });
+            result
+        })
+    }
+
+    fn transpose_cpu(&self) -> Tensor {
         self.assume_on_cpu();
         let mut result = unsafe { Tensor::uninitialized(self.cols, self.rows, self.dtype) };
         for row in 0..self.rows {
@@ -665,18 +799,27 @@ impl Tensor {
     }
 
     pub fn matrix_mul_transposed(&self, other: &Tensor) -> Tensor {
-        self.assume_on_cpu();
-        other.assume_on_cpu();
         if self.cols != other.cols {
             panic!(
                 "Invalid matrix transposed multiplication {}x{} vs {}x{}",
                 self.rows, self.cols, other.cols, other.rows
             );
         }
+        #[cfg(not(feature = "opencl"))]
         if other.rows == 1 {
             return self.matrix_vector_mul_transposed(other);
         }
+        #[cfg(feature = "opencl")]
+        if other.rows == 1 && self.is_on_cpu() {
+            return self.matrix_vector_mul_transposed(other);
+        }
         let mut result = unsafe { Tensor::uninitialized(self.rows, other.rows, self.dtype) };
+        #[cfg(feature = "opencl")]
+        if self.is_on_gpu() {
+            let od = self.opencl_data.write().unwrap();
+            result.to_gpu(&od.as_ref().unwrap().cl()).unwrap();
+        }
+
         result.matrix_mul_inplace_transposed(self, other);
         result
     }
@@ -837,6 +980,11 @@ impl Tensor {
             return true;
         }
         false
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn is_on_cpu(&self) -> bool {
+        return !self.is_on_gpu();
     }
 
     #[cfg(feature = "opencl")]
@@ -2033,8 +2181,108 @@ mod tests {
 
     #[cfg(feature = "opencl")]
     #[test]
+    fn gpu_silu_and_cpu_silu_agree() {
+        let cl = OpenCL::new(false, 0).unwrap();
+
+        for _trial in 0..300 {
+            let mut rng = rand::thread_rng();
+            let a = rng.gen_range(1..=300);
+            let b = rng.gen_range(1..=300);
+            let mat1 = Tensor::random(a, b, TensorDType::Float16);
+            let mat2 = mat1.clone();
+            let mut mat2 = mat2.to_f16();
+            mat2.to_gpu(&cl).unwrap();
+
+            let mat1_result = mat1.silu();
+            let mut mat2_result = mat2.silu();
+            mat2_result.to_cpu().unwrap();
+
+            assert_eq!(mat1_result.rows(), mat2_result.rows());
+            assert_eq!(mat1_result.cols(), mat2_result.cols());
+
+            for row in 0..mat1_result.rows {
+                for col in 0..mat1_result.cols {
+                    assert_relative_eq!(
+                        mat1_result.get_f32(row, col),
+                        mat2_result.get_f32(row, col),
+                        epsilon = 1e-2
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
+    fn gpu_hadamard_product_and_cpu_hadamard_product_agree() {
+        let cl = OpenCL::new(false, 0).unwrap();
+
+        for _trial in 0..300 {
+            let mut rng = rand::thread_rng();
+            let a = rng.gen_range(1..=300);
+            let b = rng.gen_range(1..=300);
+            let mat1 = Tensor::random(a, b, TensorDType::Float16);
+            let mat2 = Tensor::random(a, b, TensorDType::Float16);
+
+            let mut mat1_gpu = mat1.to_f16();
+            let mut mat2_gpu = mat2.to_f16();
+            mat1_gpu.to_gpu(&cl).unwrap();
+            mat2_gpu.to_gpu(&cl).unwrap();
+
+            let result1 = mat1.hadamard_product(&mat2);
+            let mut result2 = mat1_gpu.hadamard_product(&mat2_gpu);
+            result2.to_cpu().unwrap();
+
+            assert_eq!(result1.rows(), result2.rows());
+            assert_eq!(result1.cols(), result2.cols());
+
+            for row in 0..result1.rows() {
+                for col in 0..result2.cols() {
+                    assert_relative_eq!(
+                        result1.get_f32(row, col),
+                        result2.get_f32(row, col),
+                        epsilon = 1e-2
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
+    fn gpu_transpose_and_cpu_transpose_agree() {
+        let cl = OpenCL::new(false, 0).unwrap();
+        let mut rng = rand::thread_rng();
+        for _trial in 0..300 {
+            let a = rng.gen_range(1..=100);
+            let b = rng.gen_range(1..=100);
+            let mat1 = Tensor::random(a, b, TensorDType::Float16);
+            let mut mat1_gpu = mat1.to_f16();
+            mat1_gpu.to_gpu(&cl).unwrap();
+
+            let mat1_transposed = mat1.transpose();
+            let mut mat1_gpu_transposed = mat1_gpu.transpose();
+            mat1_gpu_transposed.to_cpu().unwrap();
+
+            assert_eq!(mat1_transposed.rows(), mat1_gpu_transposed.rows());
+            assert_eq!(mat1_transposed.cols(), mat1_gpu_transposed.cols());
+
+            for row in 0..mat1_transposed.rows {
+                for col in 0..mat1_transposed.cols {
+                    assert_relative_eq!(
+                        mat1_transposed.get_f32(row, col),
+                        mat1_gpu_transposed.get_f32(row, col),
+                        epsilon = 1e-2,
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
     fn gpu_matrix_mul_transposed_is_close_to_cpu_matrix_mul_transposed() {
-        let cl = OpenCL::new(true, 1).unwrap();
+        let cl = OpenCL::new(false, 0).unwrap();
         let mut rng = rand::thread_rng();
 
         for _trial in 0..300 {
