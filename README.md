@@ -98,4 +98,11 @@ LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  567ms / token
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  956ms / token
 LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  987ms / token
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1706ms / token
+
+# commit 35b0c372a87192761e17beb421699ea5ad4ac1ce  (13 March 2023)
+# I moved some attention stuff to OpenCL too.
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  283ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  679ms / token
+LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <ran out of GPU memory>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1226ms / token
 ```
