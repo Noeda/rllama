@@ -56,6 +56,9 @@ cast to 32-bit floats.
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.
 
+You can also use `--prompt-file` to read the prompt from a file instead from
+the command line.
+
 # How to turn on OpenCL
 
 Use `opencl` Cargo feature.

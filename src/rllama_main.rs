@@ -226,6 +226,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut times_per_token: Vec<std::time::Duration> = vec![];
     let mut caches = tr.make_caches();
     let mut first: bool = true;
+    let mut stop_seen: bool = false;
     while toks_id.len() < max_seq_len {
         let now = std::time::Instant::now();
 
@@ -239,6 +240,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let mut tok_str: String = "".to_string();
             let tok = tok.id_to_str(*tok_id);
+            if tok == "</s>" {
+                tok_str += "";
+                stop_seen = true;
+            }
             if tok == "<0x0A>" {
                 tok_str += "\n";
             } else {
@@ -258,8 +263,16 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::io::stdout().flush();
         prev_pos = toks_id.len() - 1;
         first = false;
+        if stop_seen {
+            break;
+        }
     }
     println!("");
+    if stop_seen {
+        if !be_quiet {
+            println!("Stop token seen. Stopping.");
+        }
+    }
     if !be_quiet {
         println!("---");
         println!(
