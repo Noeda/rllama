@@ -2,11 +2,14 @@
 
 This is my attempt at making the LLaMA language model working on a pure Rust
 CPU implementation. I was inspired by an amazing CPU implementation here:
-https://github.com/ggerganov/ggml that could run GPT-J 8B models.
+https://github.com/ggerganov/ggml that could run GPT-J 6B models.
 
-As of writing of this, this can run LLaMA-7B at around ~1 token per second, on
-a Ryzen 3950X using something like 1.5 threads because I haven't yet properly
-figured out how to multithread this.
+With my crappy OpenCL, this will do around ~270ms on my GTX 3090 per token.
+With pure CPU on Ryzen 3950X and OpenCL, I can get around 700ms per token. And
+without any OpenCL, pure Rust code only, with some of my handwritten AVX2
+intrinsics, about 1 second per token. All on LLaMA-7B.
+
+(Scroll to the bottom to see some benchmarks)
 
 I've also managed to run LLaMA-13B which just barely fits in my 64-gig machine
 with 32-bit float weights everywhere.
@@ -17,9 +20,6 @@ all the weights around so generating a token takes minutes.
 I have not tried LLaMA-60B but presumably if all the smaller models work it
 would run given a sufficiently chonky computer.
 
-This uses AVX2 intrinsics to speed up itself. Therefore, you need an x86-family
-CPU to run this.
-
 It also has a Python unpickler that understands the `.pth` files used by
 PyTorch. Well almost, it doesn't unzip them automatically (see below).
 
@@ -27,7 +27,7 @@ PyTorch. Well almost, it doesn't unzip them automatically (see below).
 
 You will need Rust. Make sure you can run `cargo` from a command line. In
 particular, this is using unstable features so you need nightly rust. Make sure
-if you write `cargo --version` it is nightly.
+that if you write `cargo --version` it shows that it is nightly Rust.
 
 You will need to download LLaMA-7B weights. Refer to https://github.com/facebookresearch/llama/
 
@@ -50,31 +50,34 @@ cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /
 ```
 
 Right now it seems to use around ~25 gigabytes of memory for 7B and around ~50
-gigabytes for 13B. If you don't use OpenCL, then all parameters are cast to
-32-bit floats.
+gigabytes for 13B. If you don't use OpenCL, then internally all parameters are
+cast to 32-bit floats.
 
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.
 
-# Future plans
+# Notes and future plans
 
 This is a hobby thing for me so don't expect updates or help.
 
 * Some other CPU implementations use quantization to reduce the size of weights
+  and generally speed up everything a lot.
 * Put some of the operations on the OpenCL GPU/CPU. I've made some initial
-  OpenCL code but it is not used in the transformer loop yet. The CPU OpenCL
-  improves my own AVX2 code by like 100% and massively so on GPU although I am
-  also like 20x slower than equivalent operation on PyTorch on the same GPU.
+  OpenCL code for matrix multiplications but the performance is not competetive
+  with frameworks like PyTorch on GPU.
 * I've heard there is some thing called Tensor Cores on nVidia GPUs. Not
   accessible with OpenCL. But might be accessible on Vulkan with a an
   extension.
 * More sophisticated token sampling. I saw on Hackernews some comments how the
-  samplers are kinda garbage and you can get much better results with good
-  defaults and things like repetition penalty.
+  samplers included in Facebook's reference code are kinda garbage and you can
+  get much better results with good defaults and things like repetition
+  penalty.
 * There is an initial start-up time as the program has to pass through the
   initial prompt. I don't know if this start-up time can be eliminated
   completely but it could be cached on disk. Use cases like having a standard
   prompt to prime the text generation that you reuse many times.
+* Stanford released some instruct-finetuned LLaMA-7B, once I find the weights
+  then I'd like to try make a chat-like command-line interface.
 
 # Benchmarks
 
