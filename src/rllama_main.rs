@@ -36,6 +36,8 @@ struct Cli {
     top_p: Option<f32>,
     #[arg(long)]
     top_k: Option<i32>,
+    #[arg(long)]
+    repetition_penalty: Option<f32>,
 
     #[cfg(feature = "opencl")]
     #[arg(long)]
@@ -185,7 +187,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut toks_id: Vec<TokenId> = tok.tokenize_to_ids(prompt.clone());
     let mut prev_pos = 0;
-    let mut token_sampler = TokenSampler::new().temperature(0.8).top_p(0.9).top_k(50);
+    let mut token_sampler = TokenSampler::new()
+        .temperature(0.8)
+        .top_p(0.9)
+        .top_k(50)
+        .repetition_penalty(0.8);
 
     if let Some(temperature) = cli.temperature {
         token_sampler = token_sampler.temperature(temperature);
@@ -195,6 +201,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(top_k) = cli.top_k {
         token_sampler = token_sampler.top_k(top_k as usize);
+    }
+    if let Some(repetition_penalty) = cli.repetition_penalty {
+        token_sampler = token_sampler.repetition_penalty(repetition_penalty);
     }
 
     pln!("---");
@@ -209,6 +218,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     pln!("Temperature: {}", token_sampler.get_temperature());
     pln!("Top P: {}", token_sampler.get_top_p());
     pln!("Top K: {}", token_sampler.get_top_k());
+    pln!(
+        "Repetition penalty: {}",
+        token_sampler.get_repetition_penalty()
+    );
     pln!("---");
     pln!(
         "{}",
@@ -229,9 +242,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stop_seen: bool = false;
     while toks_id.len() < max_seq_len {
         let now = std::time::Instant::now();
-
         let preds = tr.forward(&toks_id[prev_pos..], prev_pos, &mut caches);
-        let highest_pred_idx = token_sampler.sample(&preds);
+
+        let (highest_pred_idx, token_prob) = token_sampler.sample(&preds, &tok, &toks_id);
         toks_id.push(highest_pred_idx as TokenId);
 
         for (tok_idx, tok_id) in toks_id[prev_pos + 1..].iter().enumerate() {
@@ -252,7 +265,18 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             if first && tok_idx < toks_id.len() - 2 {
                 // intentionally left empty
             } else {
-                print!("{}", tok_str.truecolor(128, 255, 128));
+                let redness: f32 = token_prob * 255.0;
+                let redness = if redness > 255.0 {
+                    255
+                } else if redness < 0.0 {
+                    0
+                } else {
+                    redness as u8
+                };
+                print!(
+                    "{}",
+                    tok_str.truecolor(128 + redness / 2, 255 - redness / 2, 128)
+                );
             }
         }
         if first {

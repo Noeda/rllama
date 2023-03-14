@@ -56,6 +56,12 @@ cast to 32-bit floats.
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.
 
+There is `--repetition-penalty` setting. 1.0 means no penalty. This value
+likely should be between 0 and 1. Values smaller than 1.0 give a penalty to
+tokens that appear in the context, by
+`x*(repetitition_penalty^num_occurrences)` before applying `softmax()` on the
+output probabilities. Or in other words, values smaller than 1.0 apply penalty.
+
 You can also use `--prompt-file` to read the prompt from a file instead from
 the command line.
 
