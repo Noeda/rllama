@@ -56,6 +56,10 @@ cast to 32-bit floats.
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.
 
+# Screenshot
+
+![Screenshot of RLLaMA in action](rllama.png)
+
 # Notes and future plans
 
 This is a hobby thing for me so don't expect updates or help.
