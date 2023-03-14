@@ -62,10 +62,10 @@ This is a hobby thing for me so don't expect updates or help.
 
 * Some other CPU implementations use quantization to reduce the size of weights
 * Put some of the operations on the OpenCL GPU/CPU. I've made some initial
-  OpenCL code but it is not used in the transformer loop yet. The CPU OpenCL
-  improves my own AVX2 code by like 100% and massively so on GPU although I am
-  also like 20x slower than equivalent operation on PyTorch on the same GPU.
-* I've heard there is some thing called Tensor Cores on nVidia GPUs. Not
+  OpenCL code but there's still bunch of stuff that could be OpenCLified.
+  The OpenCL code is fast for both GPU OpenCL and CPU OpenCL (better than my
+  own handwritten AVX2 code which makes me sad).
+* I've heard there is some thing called Tensor Cores on NVidia GPUs. Not
   accessible with OpenCL. But might be accessible on Vulkan with a an
   extension.
 * More sophisticated token sampling. I saw on Hackernews some comments how the

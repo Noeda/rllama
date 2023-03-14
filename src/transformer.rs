@@ -8,6 +8,7 @@ use crate::unpickler::UnpicklingError;
 use indicatif::ProgressBar;
 use num_complex::Complex;
 use rayon::prelude::*;
+use std::mem::drop;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
@@ -38,6 +39,8 @@ pub struct DataSettings {
     #[cfg(feature = "opencl")]
     use_opencl_for_attention: bool,
     #[cfg(feature = "opencl")]
+    use_opencl_for_rmsnorm: bool,
+    #[cfg(feature = "opencl")]
     cl: Option<OpenCL>,
 }
 
@@ -51,6 +54,7 @@ impl DataSettings {
         DataSettings {
             use_opencl_for_feedforward: false,
             use_opencl_for_attention: false,
+            use_opencl_for_rmsnorm: false,
             cl: cl.clone(),
         }
     }
@@ -67,6 +71,7 @@ impl DataSettings {
         }
         self.use_opencl_for_feedforward = true;
         self.use_opencl_for_attention = true;
+        self.use_opencl_for_rmsnorm = true;
         self
     }
 }
@@ -137,6 +142,7 @@ impl TransformerCaches {
 pub struct RMSNorm {
     eps: f64,
     weight: Tensor,
+    data_settings: DataSettings,
 }
 
 pub struct Attention {
@@ -195,9 +201,15 @@ impl Transformer {
                 result
             })
             .collect::<Result<Vec<TransformerBlock>, UnpicklingError>>()?;
-        std::mem::drop(progress_bar);
+        drop(progress_bar);
 
-        let norm = RMSNorm::from_unpickled(unpickled, "norm.weight".to_string(), eps, data_dir)?;
+        let norm = RMSNorm::from_unpickled(
+            unpickled,
+            "norm.weight".to_string(),
+            eps,
+            data_settings.clone(),
+            data_dir,
+        )?;
         let output = Tensor::from_unpickled_pieces(
             unpickled,
             "output.weight",
@@ -261,18 +273,23 @@ impl Transformer {
             embs.push(emb);
         }
         let mut emb_tensor: Tensor = Tensor::concat(&embs);
-        std::mem::drop(embs);
+        drop(embs);
 
         for (idx, layer) in self.layers.iter().enumerate() {
             emb_tensor = layer.forward(
-                &emb_tensor,
+                &mut emb_tensor,
                 start_pos,
                 &self.freqs_cis,
                 &mask,
                 &mut caches.layer_caches[idx],
             );
         }
-        let out = self.norm.forward(&emb_tensor);
+        let mut out = self.norm.forward(&mut emb_tensor);
+        #[cfg(feature = "opencl")]
+        if out.is_on_gpu() {
+            out.to_cpu().unwrap();
+            out = out.to_f32();
+        }
         let out = out.row(out.rows() - 1);
 
         self.output.matrix_mul_transposed(&out)
@@ -296,19 +313,21 @@ impl TransformerBlock {
             layer_id,
             n_local_heads,
             head_dim,
-            data_settings,
+            data_settings.clone(),
             data_dir,
         )?;
         let ffn_norm = RMSNorm::from_unpickled(
             unpickled,
             format!("layers.{}.ffn_norm.weight", layer_id),
             eps,
+            data_settings.clone(),
             data_dir,
         )?;
         let attn_norm = RMSNorm::from_unpickled(
             unpickled,
             format!("layers.{}.attention_norm.weight", layer_id),
             eps,
+            data_settings.clone(),
             data_dir,
         )?;
         Ok(Self {
@@ -321,26 +340,61 @@ impl TransformerBlock {
 
     pub fn forward(
         &self,
-        x: &Tensor,
+        x: &mut Tensor,
         start_pos: usize,
         freqs_cis: &FreqsCis,
         mask: &Option<Tensor>,
         attention_cache: &mut AttentionCache,
     ) -> Tensor {
+        let now = std::time::Instant::now();
         let mut attnorm_out = self.attention_norm.forward(x);
-        let att_out = self.attn.forward(
+        let now = std::time::Instant::now();
+        let mut att_out = self.attn.forward(
             &mut attnorm_out,
             start_pos,
             freqs_cis,
             mask,
             attention_cache,
         );
-        std::mem::drop(attnorm_out);
+        let now = std::time::Instant::now();
+        drop(attnorm_out);
 
-        let h = x.add(&att_out);
-        let mut att_out = self.ffn_norm.forward(&h);
+        #[cfg(feature = "opencl")]
+        let mut x_was_on_cpu: bool;
+        #[cfg(feature = "opencl")]
+        {
+            x_was_on_cpu = x.is_on_cpu();
+            if x_was_on_cpu {
+                *x = x.to_f16();
+                x.to_gpu(self.attention_norm.data_settings.cl.as_ref().unwrap())
+                    .unwrap();
+            }
+            if x.is_on_gpu() {
+                att_out = att_out.to_f16();
+                att_out
+                    .to_gpu(self.attention_norm.data_settings.cl.as_ref().unwrap())
+                    .unwrap();
+            }
+        }
+        let mut h = x.add(&att_out);
+        let now = std::time::Instant::now();
+        let mut att_out = self.ffn_norm.forward(&mut h);
+        let now = std::time::Instant::now();
         let att_out = self.feed_forward.forward(&mut att_out).transpose();
-        h.add(&att_out)
+        let mut result = h.add(&att_out);
+        #[cfg(feature = "opencl")]
+        {
+            if x_was_on_cpu {
+                result.to_cpu().unwrap();
+                return result.to_f32();
+            } else {
+                result
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            result
+        }
     }
 }
 
@@ -349,26 +403,64 @@ impl RMSNorm {
         unpickled: &[unpickler::Value],
         name: String,
         eps: f64,
+        data_settings: DataSettings,
         data_dir: P,
     ) -> Result<RMSNorm, UnpicklingError> {
         let data_dir: &Path = data_dir.as_ref();
-        let weights = Tensor::from_unpickled_pieces(
+        let mut weights = Tensor::from_unpickled_pieces(
             &unpickled[0..=0],
             name.clone(),
             data_dir,
             FromPiecesDirection::Rows,
-        )?
-        .to_f32();
+        )?;
+
+        #[cfg(feature = "opencl")]
+        {
+            if data_settings.use_opencl_for_rmsnorm {
+                weights = weights.to_f16();
+                let ds = data_settings.clone();
+                weights.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
+            } else {
+                weights = weights.to_f32();
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            weights = weights.to_f32();
+        }
+
         Ok(Self {
             eps,
             weight: weights,
+            data_settings,
         })
     }
 
-    fn forward(&self, x: &Tensor) -> Tensor {
+    fn forward(&self, x: &mut Tensor) -> Tensor {
+        #[cfg(feature = "opencl")]
+        let x_was_on_cpu: bool;
+        #[cfg(feature = "opencl")]
+        {
+            x_was_on_cpu = x.is_on_cpu();
+            if self.data_settings.use_opencl_for_rmsnorm && x_was_on_cpu {
+                *x = x.to_f16();
+                x.to_gpu(self.data_settings.cl.as_ref().unwrap()).unwrap();
+            }
+        }
         let inner = x.pow(2.0).mean_cols().add_scalar(self.eps as f32);
         let out1 = x.scalar_multiply_broadcast(&inner.rsqrt());
-        out1.hadamard_product_broadcast(&self.weight)
+        let mut result = out1.hadamard_product_broadcast(&self.weight);
+        #[cfg(feature = "opencl")]
+        {
+            if x_was_on_cpu {
+                result.to_cpu().unwrap();
+            }
+            result
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            result
+        }
     }
 }
 
@@ -410,6 +502,10 @@ impl FeedForward {
                 w1.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
                 w2.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
                 w3.to_gpu(&ds.cl.unwrap()).unwrap();
+            } else {
+                w1 = w1.to_f32();
+                w2 = w2.to_f32();
+                w3 = w3.to_f32();
             }
         }
         #[cfg(not(feature = "opencl"))]
@@ -433,7 +529,7 @@ impl FeedForward {
         #[cfg(feature = "opencl")]
         {
             x_was_on_cpu = x.is_on_cpu();
-            if self.data_settings.use_opencl_for_feedforward {
+            if self.data_settings.use_opencl_for_feedforward && x_was_on_cpu {
                 *x = x.to_f16();
                 x.to_gpu(self.data_settings.cl.as_ref().unwrap()).unwrap();
             }
@@ -514,6 +610,11 @@ impl Attention {
                 wk.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
                 wv.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
                 wo.to_gpu(&ds.cl.unwrap()).unwrap();
+            } else {
+                wq = wq.to_f32();
+                wk = wk.to_f32();
+                wv = wv.to_f32();
+                wo = wo.to_f32();
             }
         }
         #[cfg(not(feature = "opencl"))]
@@ -548,7 +649,7 @@ impl Attention {
         #[cfg(feature = "opencl")]
         {
             x_was_on_cpu = x.is_on_cpu();
-            if self.data_settings.use_opencl_for_attention {
+            if self.data_settings.use_opencl_for_attention && x_was_on_cpu {
                 *x = x.to_f16();
                 x.to_gpu(self.data_settings.cl.as_ref().unwrap()).unwrap();
             }
@@ -686,8 +787,21 @@ impl Attention {
             .collect();
 
         let output3: Vec<&Tensor> = output2.iter().collect();
-        let output2: Tensor = Tensor::concat(&output3);
-        output2
+        let mut output2: Tensor = Tensor::concat(&output3);
+
+        #[cfg(feature = "opencl")]
+        {
+            if x_was_on_cpu {
+                output2.to_cpu().unwrap();
+                return output2.to_f32();
+            } else {
+                return output2;
+            }
+        }
+        #[cfg(not(feature = "opencl"))]
+        {
+            output2
+        }
     }
 }
 

@@ -18,6 +18,20 @@ struct Programs {
     hadamard_product_f16: Kernel,
     transpose_f16_program: Program,
     transpose_f16: Kernel,
+    pow_f16_program: Program,
+    pow_f16: Kernel,
+    mean_cols_f16_program: Program,
+    mean_cols_f16: Kernel,
+    add_scalar_f16_program: Program,
+    add_scalar_f16: Kernel,
+    scalar_multiply_broadcast_f16_program: Program,
+    scalar_multiply_broadcast_f16: Kernel,
+    hadamard_product_broadcast_f16_program: Program,
+    hadamard_product_broadcast_f16: Kernel,
+    rsqrt_f16_program: Program,
+    rsqrt_f16: Kernel,
+    add_f16_program: Program,
+    add_f16: Kernel,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +231,58 @@ impl OpenCLTensor {
         Ok(OpenCLEvent { event })
     }
 
+    pub fn add_scalar_inplace(&mut self, scalar: f32) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.add_scalar_f16.set_arg(0, self.buf.clone()).unwrap();
+        prg.add_scalar_f16
+            .set_arg(1, self.cols_capacity as i32)
+            .unwrap();
+        prg.add_scalar_f16.set_arg(2, scalar).unwrap();
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .add_scalar_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, self.cols as usize])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn scalar_multiply_broadcast_inplace(
+        &mut self,
+        other: &OpenCLTensor,
+    ) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.scalar_multiply_broadcast_f16
+            .set_arg(0, self.buf.clone())
+            .unwrap();
+        prg.scalar_multiply_broadcast_f16
+            .set_arg(1, other.buf.clone())
+            .unwrap();
+        prg.scalar_multiply_broadcast_f16
+            .set_arg(2, self.cols_capacity as i32)
+            .unwrap();
+        prg.scalar_multiply_broadcast_f16
+            .set_arg(3, other.cols_capacity as i32)
+            .unwrap();
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .scalar_multiply_broadcast_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, (self.cols_capacity / 16) as usize])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
     pub fn transpose_from(&mut self, other: &OpenCLTensor) -> Result<OpenCLEvent, OpenCLError> {
         let prg = self.cl.programs.write().unwrap();
         prg.transpose_f16.set_arg(0, self.buf.clone()).unwrap();
@@ -235,7 +301,7 @@ impl OpenCLTensor {
                 .queue(&self.queue)
                 .global_work_size([self.rows as usize, self.cols as usize])
                 .enew(&mut event);
-            b.enq().unwrap();
+            b.enq()?;
         }
         self.last_event = Some(event.clone());
         Ok(OpenCLEvent { event })
@@ -266,6 +332,85 @@ impl OpenCLTensor {
         Ok(OpenCLEvent { event })
     }
 
+    pub fn hadamard_product_broadcast_inplace(
+        &mut self,
+        other: &OpenCLTensor,
+    ) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.hadamard_product_broadcast_f16
+            .set_arg(0, self.buf.clone())?;
+        prg.hadamard_product_broadcast_f16
+            .set_arg(1, other.buf.clone())?;
+        prg.hadamard_product_broadcast_f16
+            .set_arg(2, self.cols_capacity as i32)?;
+        prg.hadamard_product_broadcast_f16
+            .set_arg(3, other.cols_capacity as i32)?;
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .hadamard_product_broadcast_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, (self.cols_capacity as usize) / 16])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn mean_cols_from(&mut self, other: &OpenCLTensor) -> Result<OpenCLEvent, OpenCLError> {
+        if self.cols != 1 {
+            panic!(
+                "mean_cols_from: number of columns in target is not 1: {}",
+                self.cols
+            );
+        }
+        if self.rows != other.rows {
+            panic!(
+                "mean_cols_from: number of rows in target is not equal to number of rows in source: {} != {}",
+                self.rows, other.rows
+            );
+        }
+        let prg = self.cl.programs.write().unwrap();
+        prg.mean_cols_f16.set_arg(0, self.buf.clone())?;
+        prg.mean_cols_f16.set_arg(1, other.buf.clone())?;
+        prg.mean_cols_f16.set_arg(2, self.cols_capacity as i32)?;
+        prg.mean_cols_f16.set_arg(3, other.cols_capacity as i32)?;
+        prg.mean_cols_f16.set_arg(4, other.cols as i32)?;
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .mean_cols_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, 1])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn pow_inplace(&mut self, scalar: f32) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.pow_f16.set_arg(0, self.buf.clone())?;
+        prg.pow_f16.set_arg(1, self.cols_capacity as i32)?;
+        prg.pow_f16.set_arg(2, scalar)?;
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .pow_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, self.cols as usize])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
     pub fn silu_inplace(&mut self) -> Result<OpenCLEvent, OpenCLError> {
         let prg = self.cl.programs.write().unwrap();
         prg.silu_f16.set_arg(0, self.buf.clone())?;
@@ -274,6 +419,44 @@ impl OpenCLTensor {
         unsafe {
             let b = prg
                 .silu_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, self.cols as usize])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn add_inplace(&mut self, left: &OpenCLTensor) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.add_f16.set_arg(0, self.buf.clone())?;
+        prg.add_f16.set_arg(1, left.buf.clone())?;
+        prg.add_f16.set_arg(2, self.cols_capacity as i32)?;
+        prg.add_f16.set_arg(3, left.cols_capacity as i32)?;
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .add_f16
+                .cmd()
+                .queue(&self.queue)
+                .global_work_size([self.rows as usize, self.cols as usize])
+                .enew(&mut event);
+            b.enq()?;
+        }
+        self.last_event = Some(event.clone());
+        Ok(OpenCLEvent { event })
+    }
+
+    pub fn rsqrt_inplace(&mut self) -> Result<OpenCLEvent, OpenCLError> {
+        let prg = self.cl.programs.write().unwrap();
+        prg.rsqrt_f16.set_arg(0, self.buf.clone())?;
+        prg.rsqrt_f16.set_arg(1, self.cols_capacity as i32)?;
+        let mut event = Event::empty();
+        unsafe {
+            let b = prg
+                .rsqrt_f16
                 .cmd()
                 .queue(&self.queue)
                 .global_work_size([self.rows as usize, self.cols as usize])
@@ -397,6 +580,75 @@ fn make_programs(ctx: &Context, queue: &Queue) -> Result<Programs, OpenCLError> 
         .arg(&0)
         .queue(queue.clone())
         .build()?;
+    let pow_f16_program = make_program_with_src(ctx, POW_F16_SRC)?;
+    let pow_f16 = Kernel::builder()
+        .program(&pow_f16_program)
+        .name("pow_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let mean_cols_f16_program = make_program_with_src(ctx, MEAN_COLS_F16_SRC)?;
+    let mean_cols_f16 = Kernel::builder()
+        .program(&mean_cols_f16_program)
+        .name("mean_cols_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let add_scalar_f16_program = make_program_with_src(ctx, ADD_SCALAR_F16_SRC)?;
+    let add_scalar_f16 = Kernel::builder()
+        .program(&add_scalar_f16_program)
+        .name("add_scalar_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let scalar_multiply_broadcast_f16_program =
+        make_program_with_src(ctx, SCALAR_MULTIPLY_BROADCAST_F16_SRC)?;
+    let scalar_multiply_broadcast_f16 = Kernel::builder()
+        .program(&scalar_multiply_broadcast_f16_program)
+        .name("scalar_multiply_broadcast_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let hadamard_product_broadcast_f16_program =
+        make_program_with_src(ctx, HADAMARD_PRODUCT_BROADCAST_F16_SRC)?;
+    let hadamard_product_broadcast_f16 = Kernel::builder()
+        .program(&hadamard_product_broadcast_f16_program)
+        .name("hadamard_product_broadcast_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let rsqrt_f16_program = make_program_with_src(ctx, RSQRT_F16_SRC)?;
+    let rsqrt_f16 = Kernel::builder()
+        .program(&rsqrt_f16_program)
+        .name("rsqrt_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
+    let add_f16_program = make_program_with_src(ctx, ADD_F16_SRC)?;
+    let add_f16 = Kernel::builder()
+        .program(&add_f16_program)
+        .name("add_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
     Ok(Programs {
         matrix_mul_transposed_by_row_f16_program,
         matrix_mul_transposed_by_row_f16,
@@ -406,6 +658,20 @@ fn make_programs(ctx: &Context, queue: &Queue) -> Result<Programs, OpenCLError> 
         hadamard_product_f16,
         transpose_f16_program,
         transpose_f16,
+        pow_f16_program,
+        pow_f16,
+        mean_cols_f16_program,
+        mean_cols_f16,
+        add_scalar_f16_program,
+        add_scalar_f16,
+        scalar_multiply_broadcast_f16_program,
+        scalar_multiply_broadcast_f16,
+        hadamard_product_broadcast_f16_program,
+        hadamard_product_broadcast_f16,
+        rsqrt_f16_program,
+        rsqrt_f16,
+        add_f16_program,
+        add_f16,
     })
 }
 
@@ -530,5 +796,133 @@ __kernel void transpose_f16(__global half *tgt,
     const int src_col = tgt_row;
     const float val = vload_half(src_row * left_cols_capacity + src_col, (__global const half*) left);
     vstore_half(val, tgt_row * ncols_capacity + tgt_col, (__global half*) tgt);
+}
+"#;
+
+/// Computes x^scalar for every f16 value in the tensor
+const POW_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void pow_f16(__global half *tgt,
+                      const int ncols_capacity,
+                      const float scalar)
+{
+    const int tgt_row = get_global_id(0);
+    const int tgt_col = get_global_id(1);
+    const float val = vload_half(tgt_row * ncols_capacity + tgt_col, (__global const half*) tgt);
+    const float result = pow(val, scalar);
+    vstore_half(result, tgt_row * ncols_capacity + tgt_col, (__global half*) tgt);
+}
+"#;
+
+/// Computes the mean of each column in a tensor
+const MEAN_COLS_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void mean_cols_f16(__global half *tgt,
+                            __global const half *left,
+                            const int ncols_capacity,
+                            const int left_cols_capacity,
+                            const int ncolumns)
+{
+    // global work group size is nrows x 1
+    const int row = get_global_id(0);
+
+    float16 src_value = 0.0;
+    for (int col16 = 0; col16 < left_cols_capacity; col16 += 16) {
+        const int actual_col = col16;
+        if (actual_col >= ncolumns) {
+            break;
+        }
+        src_value += vload_half16((row * left_cols_capacity)/16 + col16/16, (__global const half*) left);
+    }
+    float src_value_sum = src_value.s0 + src_value.s1 + src_value.s2 + src_value.s3 + src_value.s4 + src_value.s5 + src_value.s6 + src_value.s7 + src_value.s8 + src_value.s9 + src_value.sa + src_value.sb + src_value.sc + src_value.sd + src_value.se + src_value.sf;
+    src_value_sum = src_value_sum / (float) ncolumns;
+    vstore_half(src_value_sum, row * ncols_capacity, (__global half*) tgt);
+}
+"#;
+
+/// Adds a scalar to a tensor
+const ADD_SCALAR_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void add_scalar_f16(__global half *tgt, const int ncols_capacity, const float scalar)
+{
+    const int tgt_row = get_global_id(0);
+    const int tgt_col = get_global_id(1);
+    const float val = vload_half(tgt_row * ncols_capacity + tgt_col, (__global const half*) tgt);
+    const float result = val + scalar;
+    vstore_half(result, tgt_row * ncols_capacity + tgt_col, (__global half*) tgt);
+}
+"#;
+
+/// Adds scalars from a row vector to each row of a tensor
+const SCALAR_MULTIPLY_BROADCAST_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void scalar_multiply_broadcast_f16(__global half *tgt,
+                                            __global const half *left,
+                                            const int ncols_capacity,
+                                            const int left_cols_capacity)
+{
+    // global work group size is nrows x (ncols/16)
+    const int row = get_global_id(0);
+    const int col = get_global_id(1) * 16;
+
+    const float scalar = vload_half(row * left_cols_capacity, (__global const half*) left);
+
+    float16 src_value = vload_half16((row * ncols_capacity)/16 + col/16, (__global const half*) tgt) * scalar;
+    vstore_half16(src_value, (row * ncols_capacity)/16 + col/16, (__global half*) tgt);
+}
+"#;
+
+/// Does a hadamard product from a column vector to each column of a tensor
+const HADAMARD_PRODUCT_BROADCAST_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void hadamard_product_broadcast_f16(__global half *tgt,
+                                             __global const half *left,
+                                             const int ncols_capacity,
+                                             const int left_cols_capacity)
+{
+    // global work group size is nrows x (ncols/16)
+    const int row = get_global_id(0);
+    const int col16 = get_global_id(1) * 16;
+    const float16 product_value = vload_half16(col16/16, (__global const half*) left);
+    const float16 src_value = vload_half16((row * ncols_capacity)/16 + col16/16, (__global const half*) tgt);
+    const float16 result = src_value * product_value;
+    vstore_half16(result, (row * ncols_capacity)/16 + col16/16, (__global half*) tgt);
+}
+"#;
+
+/// Computes 1/sqrt(x) for each f16 value in the tensor
+const RSQRT_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void rsqrt_f16(__global half *tgt, const int ncols_capacity)
+{
+    const int tgt_row = get_global_id(0);
+    const int tgt_col = get_global_id(1);
+    const float val = vload_half(tgt_row * ncols_capacity + tgt_col, (__global const half*) tgt);
+    const float result = rsqrt(val);
+    vstore_half(result, tgt_row * ncols_capacity + tgt_col, (__global half*) tgt);
+}
+"#;
+
+/// Computes sum of two tensors
+const ADD_F16_SRC: &str = r#"
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
+__kernel void add_f16(__global half *tgt,
+                     __global const half *left,
+                     const int tgt_ncols_capacity,
+                     const int left_ncols_capacity)
+{
+    const int tgt_row = get_global_id(0);
+    const int tgt_col = get_global_id(1);
+    const float tgt_v = vload_half(tgt_row * tgt_ncols_capacity + tgt_col, (__global const half*) tgt);
+    const float left_v = vload_half(tgt_row * left_ncols_capacity + tgt_col, (__global const half*) left);
+    const float result = tgt_v + left_v;
+    vstore_half(result, tgt_row * tgt_ncols_capacity + tgt_col, (__global half*) tgt);
 }
 "#;
