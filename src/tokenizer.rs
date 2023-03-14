@@ -105,6 +105,16 @@ impl Tokenizer {
         panic!("id out of range");
     }
 
+    // Tries to find a token from dictionary.
+    pub fn str_to_id(&self, s: &str) -> Option<TokenId> {
+        for (piece_str, piece_info) in self.pieces.iter() {
+            if piece_str == s {
+                return Some(piece_info.idx as i32);
+            }
+        }
+        None
+    }
+
     // Converts a string to a Vec<&str>
     // You may want to use tokenize_to_ids instead.
     //
@@ -121,11 +131,23 @@ impl Tokenizer {
             let mut best_candidate: &str = "";
             let mut best_candidate_len: usize = 0;
             let mut skip_s: &str = "";
-            for (piece_str, _piece_info) in self.pieces.iter() {
-                if s.starts_with(piece_str) && best_candidate_len < piece_str.len() {
-                    best_candidate = piece_str;
-                    best_candidate_len = piece_str.len();
-                    skip_s = &s[piece_str.len()..];
+            // Specially recognize newline. Otherwise it matches something we don't actually
+            // want.
+            if s.starts_with("\n") {
+                if self.str_to_id("<0x0A>").is_some() {
+                    best_candidate = "<0x0A>";
+                    best_candidate_len = best_candidate.len();
+                    skip_s = &s[1..];
+                } else {
+                    best_candidate = "\\n";
+                }
+            } else {
+                for (piece_str, _piece_info) in self.pieces.iter() {
+                    if s.starts_with(piece_str) && best_candidate_len < piece_str.len() {
+                        best_candidate = piece_str;
+                        best_candidate_len = piece_str.len();
+                        skip_s = &s[piece_str.len()..];
+                    }
                 }
             }
             if best_candidate_len == 0 {
