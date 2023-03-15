@@ -2154,6 +2154,33 @@ mod tests {
 
     #[cfg(feature = "opencl")]
     #[test]
+    fn gpu_matrix_mul_transposed_is_close_to_cpu_matrix_mul_transposed_512x1024() {
+        let cl = OpenCL::new(false, 0).unwrap();
+        let a = Tensor::random(512, 1024, TensorDType::Float32);
+        let b = Tensor::random(768, 1024, TensorDType::Float32);
+        let mut a2 = a.to_f16();
+        let mut b2 = b.to_f16();
+        let mut c = Tensor::random(512, 768, TensorDType::Float32);
+        let mut c2 = Tensor::zeros(512, 768, TensorDType::Float32).to_f16();
+        a2.to_gpu(&cl).unwrap();
+        b2.to_gpu(&cl).unwrap();
+        c2.to_gpu(&cl).unwrap();
+        c.matrix_mul_inplace_transposed(&a, &b);
+        c2.matrix_mul_inplace_transposed(&a2, &b2);
+        c2.to_cpu().unwrap();
+
+        assert_eq!(c.rows(), c2.rows());
+        assert_eq!(c.cols(), c2.cols());
+
+        for row in 0..c.rows {
+            for col in 0..c.cols {
+                assert_relative_eq!(c.get_f32(row, col), c2.get_f32(row, col), epsilon = 1e-1);
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
     fn gpu_matrix_mul_transposed_is_close_to_cpu_matrix_mul_transposed_1024x1024() {
         let cl = OpenCL::new(false, 0).unwrap();
         let a = Tensor::random(1024, 1024, TensorDType::Float32);
