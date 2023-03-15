@@ -487,11 +487,11 @@ __kernel void matrix_mul_transposed_f16(
     __local float lefttile[16][16];
     __local float righttile[16][16];
 
-    int global_x = get_global_id(0);
-    int global_y = get_global_id(1);
-    int local_x = get_local_id(0);
-    int local_y = get_local_id(1);
-    int num_tiles = (shared_sz + 15) / 16;
+    const int global_x = get_global_id(0);
+    const int global_y = get_global_id(1);
+    const int local_x = get_local_id(0);
+    const int local_y = get_local_id(1);
+    const int num_tiles = (shared_sz + 15) / 16;
 
     float sum = 0.0f;
     for (int t = 0; t < num_tiles; ++t) {
