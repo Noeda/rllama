@@ -4,7 +4,7 @@ This is my attempt at making the LLaMA language model working on a pure Rust
 CPU implementation. I was inspired by an amazing CPU implementation here:
 https://github.com/ggerganov/ggml that could run GPT-J 6B models.
 
-With my crappy OpenCL, this will do around ~270ms on my GTX 3090 per token.
+With my crappy OpenCL, this will do around ~240ms on my GTX 3090 per token.
 With pure CPU on Ryzen 3950X and OpenCL, I can get around 700ms per token. And
 without any OpenCL, pure Rust code only, with some of my handwritten AVX2
 intrinsics, about 1 second per token. All on LLaMA-7B.
@@ -14,8 +14,8 @@ intrinsics, about 1 second per token. All on LLaMA-7B.
 I've also managed to run LLaMA-13B which just barely fits in my 64-gig machine
 with 32-bit float weights everywhere.
 
-LLaMA-30B technically runs but my computer does not have enough memory to keep
-all the weights around so generating a token takes minutes.
+I've managed to run LLaMA-30B on a 128 gigabyte server and it gets around 4
+seconds per token using CPU OpenCL for Ryzen 5950X.
 
 I have not tried LLaMA-60B but presumably if all the smaller models work it
 would run given a sufficiently chonky computer.
