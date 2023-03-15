@@ -1,3 +1,22 @@
+/*
+ *
+ * Tensors for RLLaMA
+ *
+ * This is not a general Tensor library; but it has just enough to run the transformers in LLaMA
+ * model.
+ *
+ *
+ * The main structure you work with is Tensor, which is a 2D matrix. All Tensors here are 2D
+ * matrices with no flexibility.
+ *
+ * Tensors can be 16-bit, 32-bit and they can be on OpenCL or on the CPU.
+ *
+ * Operations have this naming convention:
+ *
+ *   If it's "to_XXX", then it returns a new tensor in the specified format.
+ *   If it's "XXX_inplace", then it has a &mut self and it modifies the tensor in place.
+ */
+
 #[cfg(feature = "opencl")]
 use crate::tensor_opencl_support::{OpenCL, OpenCLError, OpenCLEvent, OpenCLTensor};
 use crate::unpickler;
@@ -587,7 +606,7 @@ impl Tensor {
             // TODO: do not create a CPU-side copy
             let result = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
             let mut result = result.to_f16();
-            result.to_gpu(&cl).unwrap();
+            result.to_gpu_inplace(&cl).unwrap();
             result.with_opencl_data_mut(|tgt_tensor| {
                 tgt_tensor.copy_inplace(self_tensor).unwrap();
                 other.with_opencl_data(|other_tensor| {
@@ -689,7 +708,7 @@ impl Tensor {
             // TODO: don't generate a CPU-side copy, create the result directly on OpenCL side
             let mut result = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
             result = result.to_f16();
-            result.to_gpu(&cl).unwrap();
+            result.to_gpu_inplace(&cl).unwrap();
             result.with_opencl_data_mut(|tgt_tensor| {
                 tgt_tensor.copy_inplace(src_tensor).unwrap();
                 tgt_tensor.silu_inplace().unwrap();
@@ -733,7 +752,7 @@ impl Tensor {
             // TODO: don't generate a CPU-side copy, create the result directly on OpenCL side
             let mut result = unsafe { Tensor::uninitialized(self.cols, self.rows, self.dtype) };
             result = result.to_f16();
-            result.to_gpu(&cl).unwrap();
+            result.to_gpu_inplace(&cl).unwrap();
             result.with_opencl_data_mut(|tgt_tensor| {
                 tgt_tensor.transpose_from(src_tensor).unwrap();
             });
@@ -817,7 +836,7 @@ impl Tensor {
         #[cfg(feature = "opencl")]
         if self.is_on_gpu() {
             let od = self.opencl_data.write().unwrap();
-            result.to_gpu(&od.as_ref().unwrap().cl()).unwrap();
+            result.to_gpu_inplace(&od.as_ref().unwrap().cl()).unwrap();
         }
 
         result.matrix_mul_inplace_transposed(self, other);
@@ -1427,14 +1446,14 @@ impl Tensor {
     ///
     /// The tensor is moved asynchronously.
     #[cfg(feature = "opencl")]
-    pub fn to_gpu(&mut self, cl: &OpenCL) -> Result<(), TensorError> {
+    pub fn to_gpu_inplace(&mut self, cl: &OpenCL) -> Result<(), TensorError> {
         self.process_waiting_for_data_mut();
         let mut od = self.opencl_data.write().unwrap();
         if od.is_some() {
             return Ok(());
         }
         if self.dtype != TensorDType::Float16 {
-            panic!("to_gpu: Only float16 tensors are supported on the GPU");
+            panic!("to_gpu_inplace: Only float16 tensors are supported on the GPU");
         }
         let cl_tensor = cl.data_u16_to_gpu(
             self.data as *const u16,
@@ -1481,7 +1500,7 @@ impl Tensor {
     /// Sends a tensor from the GPU to the CPU. This is a no-op if the tensor is already on the
     /// CPU.
     #[cfg(feature = "opencl")]
-    pub fn to_cpu(&mut self) -> Result<(), TensorError> {
+    pub fn to_cpu_inplace(&mut self) -> Result<(), TensorError> {
         self.process_waiting_for_data_mut();
         let mut od = self.opencl_data.write().unwrap();
         if od.is_none() {
@@ -1489,7 +1508,7 @@ impl Tensor {
         }
         let data = unsafe { std::alloc::alloc(self.layout) };
         if data.is_null() {
-            panic!("to_cpu: Failed to allocate tensor");
+            panic!("to_cpu_inplace: Failed to allocate tensor");
         }
         let ev = od.as_mut().unwrap().data_u16_from_gpu(data as *mut u16)?;
         self.data = data as *mut u16 as *mut u8;
@@ -2162,12 +2181,12 @@ mod tests {
         let mut b2 = b.to_f16();
         let mut c = Tensor::random(512, 768, TensorDType::Float32);
         let mut c2 = Tensor::zeros(512, 768, TensorDType::Float32).to_f16();
-        a2.to_gpu(&cl).unwrap();
-        b2.to_gpu(&cl).unwrap();
-        c2.to_gpu(&cl).unwrap();
+        a2.to_gpu_inplace(&cl).unwrap();
+        b2.to_gpu_inplace(&cl).unwrap();
+        c2.to_gpu_inplace(&cl).unwrap();
         c.matrix_mul_inplace_transposed(&a, &b);
         c2.matrix_mul_inplace_transposed(&a2, &b2);
-        c2.to_cpu().unwrap();
+        c2.to_cpu_inplace().unwrap();
 
         assert_eq!(c.rows(), c2.rows());
         assert_eq!(c.cols(), c2.cols());
@@ -2189,12 +2208,12 @@ mod tests {
         let mut b2 = b.to_f16();
         let mut c = Tensor::random(1024, 1024, TensorDType::Float32);
         let mut c2 = Tensor::zeros(1024, 1024, TensorDType::Float32).to_f16();
-        a2.to_gpu(&cl).unwrap();
-        b2.to_gpu(&cl).unwrap();
-        c2.to_gpu(&cl).unwrap();
+        a2.to_gpu_inplace(&cl).unwrap();
+        b2.to_gpu_inplace(&cl).unwrap();
+        c2.to_gpu_inplace(&cl).unwrap();
         c.matrix_mul_inplace_transposed(&a, &b);
         c2.matrix_mul_inplace_transposed(&a2, &b2);
-        c2.to_cpu().unwrap();
+        c2.to_cpu_inplace().unwrap();
 
         assert_eq!(c.rows(), c2.rows());
         assert_eq!(c.cols(), c2.cols());
@@ -2218,11 +2237,11 @@ mod tests {
             let mat1 = Tensor::random(a, b, TensorDType::Float16);
             let mat2 = mat1.clone();
             let mut mat2 = mat2.to_f16();
-            mat2.to_gpu(&cl).unwrap();
+            mat2.to_gpu_inplace(&cl).unwrap();
 
             let mat1_result = mat1.silu();
             let mut mat2_result = mat2.silu();
-            mat2_result.to_cpu().unwrap();
+            mat2_result.to_cpu_inplace().unwrap();
 
             assert_eq!(mat1_result.rows(), mat2_result.rows());
             assert_eq!(mat1_result.cols(), mat2_result.cols());
@@ -2253,12 +2272,12 @@ mod tests {
 
             let mut mat1_gpu = mat1.to_f16();
             let mut mat2_gpu = mat2.to_f16();
-            mat1_gpu.to_gpu(&cl).unwrap();
-            mat2_gpu.to_gpu(&cl).unwrap();
+            mat1_gpu.to_gpu_inplace(&cl).unwrap();
+            mat2_gpu.to_gpu_inplace(&cl).unwrap();
 
             let result1 = mat1.hadamard_product(&mat2);
             let mut result2 = mat1_gpu.hadamard_product(&mat2_gpu);
-            result2.to_cpu().unwrap();
+            result2.to_cpu_inplace().unwrap();
 
             assert_eq!(result1.rows(), result2.rows());
             assert_eq!(result1.cols(), result2.cols());
@@ -2285,11 +2304,11 @@ mod tests {
             let b = rng.gen_range(1..=100);
             let mat1 = Tensor::random(a, b, TensorDType::Float16);
             let mut mat1_gpu = mat1.to_f16();
-            mat1_gpu.to_gpu(&cl).unwrap();
+            mat1_gpu.to_gpu_inplace(&cl).unwrap();
 
             let mat1_transposed = mat1.transpose();
             let mut mat1_gpu_transposed = mat1_gpu.transpose();
-            mat1_gpu_transposed.to_cpu().unwrap();
+            mat1_gpu_transposed.to_cpu_inplace().unwrap();
 
             assert_eq!(mat1_transposed.rows(), mat1_gpu_transposed.rows());
             assert_eq!(mat1_transposed.cols(), mat1_gpu_transposed.cols());
@@ -2323,9 +2342,9 @@ mod tests {
             let mut mat1_gpu = mat1.clone();
             let mut mat2_gpu = mat2.clone();
             let mut mat3_gpu = mat3.clone();
-            mat1_gpu.to_gpu(&cl).unwrap();
-            mat2_gpu.to_gpu(&cl).unwrap();
-            mat3_gpu.to_gpu(&cl).unwrap();
+            mat1_gpu.to_gpu_inplace(&cl).unwrap();
+            mat2_gpu.to_gpu_inplace(&cl).unwrap();
+            mat3_gpu.to_gpu_inplace(&cl).unwrap();
 
             let mat1 = mat1.to_f32();
             let mat2 = mat2.to_f32();
@@ -2333,7 +2352,50 @@ mod tests {
 
             mat3.matrix_mul_inplace_transposed(&mat1, &mat2);
             mat3_gpu.matrix_mul_inplace_transposed(&mat1_gpu, &mat2_gpu);
-            mat3_gpu.to_cpu().unwrap();
+            mat3_gpu.to_cpu_inplace().unwrap();
+
+            assert_eq!(mat3.rows(), mat3_gpu.rows());
+            assert_eq!(mat3.cols(), mat3_gpu.cols());
+
+            for row in 0..mat3.rows {
+                for col in 0..mat3.cols {
+                    assert_relative_eq!(
+                        mat3.get_f32(row, col),
+                        mat3_gpu.get_f32(row, col),
+                        epsilon = 1e-2,
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
+    fn gpu_matrix_mul_vector_transposed_is_close_to_cpu_matrix_mul_vector_transposed() {
+        let cl = OpenCL::new(false, 0).unwrap();
+        let mut rng = rand::thread_rng();
+
+        for _trial in 0..300 {
+            let a = rng.gen_range(1..=300);
+            let b = rng.gen_range(1..=300);
+
+            let mat1 = Tensor::random(a, b, TensorDType::Float16);
+            let mat2 = Tensor::random(1, b, TensorDType::Float16);
+            let mat3 = Tensor::random(a, 1, TensorDType::Float16);
+            let mut mat1_gpu = mat1.clone();
+            let mut mat2_gpu = mat2.clone();
+            let mut mat3_gpu = mat3.clone();
+            mat1_gpu.to_gpu_inplace(&cl).unwrap();
+            mat2_gpu.to_gpu_inplace(&cl).unwrap();
+            mat3_gpu.to_gpu_inplace(&cl).unwrap();
+
+            let mat1 = mat1.to_f32();
+            let mat2 = mat2.to_f32();
+            let mut mat3 = mat3.to_f32();
+
+            mat3.matrix_mul_inplace_transposed(&mat1, &mat2);
+            mat3_gpu.matrix_mul_inplace_transposed(&mat1_gpu, &mat2_gpu);
+            mat3_gpu.to_cpu_inplace().unwrap();
 
             assert_eq!(mat3.rows(), mat3_gpu.rows());
             assert_eq!(mat3.cols(), mat3_gpu.cols());

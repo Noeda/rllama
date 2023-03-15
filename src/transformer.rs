@@ -407,9 +407,9 @@ impl FeedForward {
                 w2 = w2.to_f16();
                 w3 = w3.to_f16();
                 let ds = data_settings.clone();
-                w1.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
-                w2.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
-                w3.to_gpu(&ds.cl.unwrap()).unwrap();
+                w1.to_gpu_inplace(&ds.cl.as_ref().unwrap().clone()).unwrap();
+                w2.to_gpu_inplace(&ds.cl.as_ref().unwrap().clone()).unwrap();
+                w3.to_gpu_inplace(&ds.cl.unwrap()).unwrap();
             }
         }
         #[cfg(not(feature = "opencl"))]
@@ -435,7 +435,8 @@ impl FeedForward {
             x_was_on_cpu = x.is_on_cpu();
             if self.data_settings.use_opencl_for_feedforward {
                 *x = x.to_f16();
-                x.to_gpu(self.data_settings.cl.as_ref().unwrap()).unwrap();
+                x.to_gpu_inplace(self.data_settings.cl.as_ref().unwrap())
+                    .unwrap();
             }
         }
         let (w1_out, w3_out) = rayon::join(
@@ -457,7 +458,7 @@ impl FeedForward {
         {
             let mut result = self.w2.matrix_mul_transposed(&w1w3_out);
             if x_was_on_cpu {
-                result.to_cpu().unwrap();
+                result.to_cpu_inplace().unwrap();
                 result
             } else {
                 result
@@ -510,10 +511,10 @@ impl Attention {
                 wv = wv.to_f16();
                 wo = wo.to_f16();
                 let ds = data_settings.clone();
-                wq.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
-                wk.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
-                wv.to_gpu(&ds.cl.as_ref().unwrap().clone()).unwrap();
-                wo.to_gpu(&ds.cl.unwrap()).unwrap();
+                wq.to_gpu_inplace(&ds.cl.as_ref().unwrap().clone()).unwrap();
+                wk.to_gpu_inplace(&ds.cl.as_ref().unwrap().clone()).unwrap();
+                wv.to_gpu_inplace(&ds.cl.as_ref().unwrap().clone()).unwrap();
+                wo.to_gpu_inplace(&ds.cl.unwrap()).unwrap();
             }
         }
         #[cfg(not(feature = "opencl"))]
@@ -550,7 +551,8 @@ impl Attention {
             x_was_on_cpu = x.is_on_cpu();
             if self.data_settings.use_opencl_for_attention {
                 *x = x.to_f16();
-                x.to_gpu(self.data_settings.cl.as_ref().unwrap()).unwrap();
+                x.to_gpu_inplace(self.data_settings.cl.as_ref().unwrap())
+                    .unwrap();
             }
         }
 
@@ -560,9 +562,9 @@ impl Attention {
             let mut xq_out = x.matrix_mul_transposed(&self.wq);
             let mut xk_out = x.matrix_mul_transposed(&self.wk);
             let mut xv_out = x.matrix_mul_transposed(&self.wv);
-            xq_out.to_cpu().unwrap();
-            xk_out.to_cpu().unwrap();
-            xv_out.to_cpu().unwrap();
+            xq_out.to_cpu_inplace().unwrap();
+            xk_out.to_cpu_inplace().unwrap();
+            xv_out.to_cpu_inplace().unwrap();
             (xq_out.to_f32(), xk_out.to_f32(), xv_out.to_f32())
         };
 
@@ -673,10 +675,10 @@ impl Attention {
                         .to_f16();
                     if self.wo.is_on_gpu() {
                         xq_row
-                            .to_gpu(&self.data_settings.cl.as_ref().unwrap())
+                            .to_gpu_inplace(&self.data_settings.cl.as_ref().unwrap())
                             .unwrap();
                         let mut result = xq_row.matrix_mul_transposed(&self.wo);
-                        result.to_cpu().unwrap();
+                        result.to_cpu_inplace().unwrap();
                         result.to_f32()
                     } else {
                         xq_row.matrix_mul_transposed(&self.wo)

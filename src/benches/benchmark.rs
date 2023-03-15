@@ -14,15 +14,33 @@ pub fn opencl_benchmarks(c: &mut Criterion) {
     let cl = OpenCL::new(false, 0).unwrap();
 
     let mut mul_left = Tensor::random(1024, 1024, TensorDType::Float16);
-    mul_left.to_gpu(&cl).unwrap();
+    mul_left.to_gpu_inplace(&cl).unwrap();
     let mut mul_right = Tensor::random(1024, 1024, TensorDType::Float16);
-    mul_right.to_gpu(&cl).unwrap();
+    mul_right.to_gpu_inplace(&cl).unwrap();
     let mut mul_target = Tensor::zeros(1024, 1024, TensorDType::Float16);
-    mul_target.to_gpu(&cl).unwrap();
+    mul_target.to_gpu_inplace(&cl).unwrap();
 
     let mut mul_left_cpu = Tensor::random(1024, 1024, TensorDType::Float32);
     let mut mul_right_cpu = Tensor::random(1024, 1024, TensorDType::Float32);
     let mut mul_target_cpu = Tensor::random(1024, 1024, TensorDType::Float32);
+
+    let mut mul_left1 = Tensor::random(4096, 11000, TensorDType::Float16);
+    let mut mul_right1 = Tensor::random(1, 11000, TensorDType::Float16);
+    let mut mul_target1 = Tensor::zeros(4096, 1, TensorDType::Float16);
+    mul_left1.to_gpu_inplace(&cl).unwrap();
+    mul_right1.to_gpu_inplace(&cl).unwrap();
+    mul_target1.to_gpu_inplace(&cl).unwrap();
+
+    c.bench_function(
+        "4096x11000 to 1x11000 matrix multiplication transposed on OpenCL",
+        |b| {
+            b.iter(|| {
+                mul_target1
+                    .matrix_mul_inplace_transposed(black_box(&mul_left1), black_box(&mul_right1));
+                mul_target1.finish();
+            })
+        },
+    );
 
     c.bench_function(
         "1024x1024 matrix multiplication transposed on OpenCL",
@@ -43,24 +61,24 @@ pub fn opencl_benchmarks(c: &mut Criterion) {
 
     c.bench_function("1x1 matrix from CPU to OpenCL device and back", |b| {
         b.iter(|| {
-            let _ = orig1.to_gpu(&cl).unwrap();
-            let _ = orig1.to_cpu();
+            let _ = orig1.to_gpu_inplace(&cl).unwrap();
+            let _ = orig1.to_cpu_inplace();
             orig1.finish();
         })
     });
 
     c.bench_function("1024x1024 matrix from CPU to OpenCL device and back", |b| {
         b.iter(|| {
-            let _ = orig16.to_gpu(&cl).unwrap();
-            let _ = orig16.to_cpu();
+            let _ = orig16.to_gpu_inplace(&cl).unwrap();
+            let _ = orig16.to_cpu_inplace();
             orig16.finish();
         })
     });
 
     c.bench_function("4096x4096 matrix from CPU to OpenCL device and back", |b| {
         b.iter(|| {
-            let _ = orig32.to_gpu(&cl).unwrap();
-            let _ = orig32.to_cpu();
+            let _ = orig32.to_gpu_inplace(&cl).unwrap();
+            let _ = orig32.to_cpu_inplace();
             orig32.finish();
         })
     });

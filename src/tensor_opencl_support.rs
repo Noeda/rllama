@@ -314,12 +314,19 @@ impl OpenCLTensor {
             );
         }
 
-        // Clear out the target memory
+        // Clear out the target memory.
         unsafe { self.buf.cmd().fill(0u16, None).block(false).enq()? };
 
         let prg = self.cl.programs.write().unwrap();
 
-        let prg = if self.cl.is_cpu_device {
+        // 0 = CPU optimized
+        // 1 = GPU optimized
+        // 2 = GPU optimized vector multiply (other.rows == 1)
+        const CPU: u8 = 0;
+        const GPU: u8 = 1;
+        let strategy: u8 = if self.cl.is_cpu_device { CPU } else { GPU };
+
+        let prg = if strategy == CPU {
             &prg.matrix_mul_transposed_f16_cpu_optimized
         } else {
             &prg.matrix_mul_transposed_f16
@@ -347,19 +354,26 @@ impl OpenCLTensor {
         };
 
         unsafe {
-            if self.cl.is_cpu_device {
+            if strategy == CPU {
                 let b = prg
                     .cmd()
                     .queue(&self.queue)
                     .global_work_size([self.cols as usize, self.rows as usize])
                     .enew(&mut event);
                 b.enq()?;
-            } else {
+            } else if strategy == GPU {
                 let b = prg
                     .cmd()
                     .queue(&self.queue)
                     .global_work_size([cols16 as usize, rows16 as usize])
                     .local_work_size([16, 16])
+                    .enew(&mut event);
+                b.enq()?;
+            } else {
+                let b = prg
+                    .cmd()
+                    .queue(&self.queue)
+                    .global_work_size([self.cols as usize, self.rows as usize])
                     .enew(&mut event);
                 b.enq()?;
             }
