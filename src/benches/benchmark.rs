@@ -102,6 +102,18 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     let orig_f32 = Tensor::zeros(1024, 1024, TensorDType::Float32);
     let orig_f16 = Tensor::zeros(1024, 1024, TensorDType::Float16);
 
+    let m1 = Tensor::random(1024, 128, TensorDType::Float32);
+    let m2 = Tensor::random(1, 128, TensorDType::Float32);
+
+    c.bench_function(
+        "1024x128 * 1x128 matrix vector transposed multiplication",
+        |b| {
+            b.iter(|| {
+                let _ = m1.matrix_vector_mul_transposed(black_box(&m2));
+            })
+        },
+    );
+
     c.bench_function("1024x1024 matrix from f32->f16", |b| {
         b.iter(|| {
             let _ = black_box(&orig_f32).to_f16();
