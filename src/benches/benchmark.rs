@@ -99,11 +99,39 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     let orig_84096_2 = Tensor::zeros(4096, 4096, TensorDType::Float32);
     let mut result_84096 = Tensor::zeros(8, 4096, TensorDType::Float32);
 
+    let orig_84096_1_f16 = Tensor::zeros(8, 4096, TensorDType::Float16);
+    let orig_84096_2_f16 = Tensor::zeros(4096, 4096, TensorDType::Float16);
+    let mut result_84096_f16 = Tensor::zeros(8, 4096, TensorDType::Float16);
+
     let orig_f32 = Tensor::zeros(1024, 1024, TensorDType::Float32);
     let orig_f16 = Tensor::zeros(1024, 1024, TensorDType::Float16);
 
     let m1 = Tensor::random(1024, 128, TensorDType::Float32);
     let m2 = Tensor::random(1, 128, TensorDType::Float32);
+
+    c.bench_function(
+        "matrix multiplication 8x4096 @ 4096x4096 f32 in-place, transposed",
+        |b| {
+            b.iter(|| {
+                let _ = result_84096.matrix_mul_inplace_transposed(
+                    black_box(&orig_84096_1),
+                    black_box(&orig_84096_2),
+                );
+            })
+        },
+    );
+
+    c.bench_function(
+        "matrix multiplication 8x4096 @ 4096x4096 f16 in-place, transposed",
+        |b| {
+            b.iter(|| {
+                let _ = result_84096_f16.matrix_mul_inplace_transposed(
+                    black_box(&orig_84096_1_f16),
+                    black_box(&orig_84096_2_f16),
+                );
+            })
+        },
+    );
 
     c.bench_function(
         "1024x128 * 1x128 matrix vector transposed multiplication",
@@ -132,18 +160,6 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
             b.iter(|| {
                 let _ = result_84096
                     .matrix_mul_inplace(black_box(&orig_84096_1), black_box(&orig_84096_2));
-            })
-        },
-    );
-
-    c.bench_function(
-        "matrix multiplication 8x4096 @ 4096x4096 f32 in-place, transposed",
-        |b| {
-            b.iter(|| {
-                let _ = result_84096.matrix_mul_inplace_transposed(
-                    black_box(&orig_84096_1),
-                    black_box(&orig_84096_2),
-                );
             })
         },
     );
