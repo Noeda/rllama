@@ -587,7 +587,7 @@ pub fn unpickle(bytes: &[u8]) -> Result<Value, UnpicklingError> {
                 ));
             }
             let idx = u32::from_le_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
-            match memo.get(&(idx as u32)) {
+            match memo.get(&{ idx }) {
                 None => {
                     return Err(UnpicklingError::UnpicklingError(
                         "LONG_BINGET index out of range".to_string(),

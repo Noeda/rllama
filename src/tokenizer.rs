@@ -133,7 +133,7 @@ impl Tokenizer {
             let mut skip_s: &str = "";
             // Specially recognize newline. Otherwise it matches something we don't actually
             // want.
-            if s.starts_with("\n") {
+            if s.starts_with('\n') {
                 if self.str_to_id("<0x0A>").is_some() {
                     best_candidate = "<0x0A>";
                     best_candidate_len = best_candidate.len();

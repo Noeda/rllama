@@ -152,10 +152,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     pln!("Loading embeddings from {}...", model_path);
     let emb = Embedding::from_unpickled(&unpickle_results, model_path.clone())?;
 
-    let max_seq_len = match cli.max_seq_len {
-        Some(max_seq_len) => max_seq_len,
-        None => 1024,
-    };
+    let max_seq_len = cli.max_seq_len.unwrap_or(1024);
 
     let data_settings = {
         #[cfg(feature = "opencl")]
@@ -291,11 +288,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
     }
-    println!("");
-    if stop_seen {
-        if !be_quiet {
-            println!("Stop token seen. Stopping.");
-        }
+    println!();
+    if stop_seen && !be_quiet {
+        println!("Stop token seen. Stopping.");
     }
     if !be_quiet {
         println!("---");

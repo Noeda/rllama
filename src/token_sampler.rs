@@ -68,7 +68,7 @@ impl TokenSampler {
     pub fn sample(
         &self,
         logits: &Tensor,
-        tokenizer: &Tokenizer,
+        _tokenizer: &Tokenizer,
         existing_tokens: &[TokenId],
     ) -> (TokenId, f32) {
         let mut times_used: BTreeMap<TokenId, usize> = BTreeMap::new();
@@ -119,7 +119,7 @@ impl TokenSampler {
                 None => {
                     // Sort NaNs to bottom
                     if b.1.is_nan() {
-                        return std::cmp::Ordering::Less;
+                        std::cmp::Ordering::Less
                     } else if a.1.is_nan() {
                         return std::cmp::Ordering::Greater;
                     } else {

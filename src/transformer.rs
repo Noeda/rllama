@@ -354,7 +354,7 @@ impl RMSNorm {
         let data_dir: &Path = data_dir.as_ref();
         let weights = Tensor::from_unpickled_pieces(
             &unpickled[0..=0],
-            name.clone(),
+            name,
             data_dir,
             FromPiecesDirection::Rows,
         )?
@@ -448,11 +448,11 @@ impl FeedForward {
 
         #[cfg(not(feature = "opencl"))]
         if w1w3_out.rows() == 1 {
-            return self
+            self
                 .w2
-                .matrix_vector_mul_transposed_multithreaded(&w1w3_out);
+                .matrix_vector_mul_transposed_multithreaded(&w1w3_out)
         } else {
-            return self.w2.matrix_mul_transposed(&w1w3_out);
+            self.w2.matrix_mul_transposed(&w1w3_out)
         }
         #[cfg(feature = "opencl")]
         {
