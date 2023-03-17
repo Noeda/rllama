@@ -108,6 +108,26 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
 
     let m1 = Tensor::random(1024, 128, TensorDType::Float32);
     let m2 = Tensor::random(1, 128, TensorDType::Float32);
+    let m1_f16 = m1.to_f16();
+    let m2_f16 = m2.to_f16();
+
+    c.bench_function(
+        "1024x128 * 1x128 matrix vector transposed multiplication, f32",
+        |b| {
+            b.iter(|| {
+                let _ = m1.matrix_vector_mul_transposed(black_box(&m2));
+            })
+        },
+    );
+
+    c.bench_function(
+        "1024x128 * 1x128 matrix vector transposed multiplication, f16",
+        |b| {
+            b.iter(|| {
+                let _ = m1_f16.matrix_vector_mul_transposed(black_box(&m2_f16));
+            })
+        },
+    );
 
     c.bench_function(
         "matrix multiplication 8x4096 @ 4096x4096 f32 in-place, transposed",
@@ -129,15 +149,6 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
                     black_box(&orig_84096_1_f16),
                     black_box(&orig_84096_2_f16),
                 );
-            })
-        },
-    );
-
-    c.bench_function(
-        "1024x128 * 1x128 matrix vector transposed multiplication",
-        |b| {
-            b.iter(|| {
-                let _ = m1.matrix_vector_mul_transposed(black_box(&m2));
             })
         },
     );
