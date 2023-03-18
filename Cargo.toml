@@ -2,6 +2,14 @@
 name = "rllama"
 version = "0.1.0"
 edition = "2021"
+authors = ["Mikko Juola"]
+description = "Pure Rust implementation of LLaMA-family of models, executable"
+documentation = "https://github.com/Noeda/rllama"
+homepage = "https://github.com/Noeda/rllama"
+repository = "https://github.com/Noeda/rllama"
+license = "AGPL-3.0"
+keywords = ["llama", "machine-learning"]
+categories = ["command-line-utilities"]
 
 [lib]
 path = "src/lib.rs"
@@ -24,10 +32,10 @@ indicatif = "0.17"
 colored = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ocl = "0.19"
+ocl = { version = "0.19", optional = true }
 
 [features]
-opencl = []
+opencl = ["ocl"]
 
 # We need protobuf compiler
 [build-dependencies]
