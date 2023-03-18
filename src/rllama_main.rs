@@ -39,6 +39,9 @@ struct Cli {
     #[arg(long)]
     repetition_penalty: Option<f32>,
 
+    #[arg(long)]
+    max_threads: Option<usize>,
+
     #[arg(long, action)]
     f16: bool,
 
@@ -62,6 +65,17 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_path = cli.model_path;
     let tokenizer_path = cli.tokenizer_path;
     let param_path = cli.param_path;
+
+    let max_threads: usize = match cli.max_threads {
+        None => rayon::current_num_threads(),
+        Some(max_threads) => {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(max_threads)
+                .build_global()
+                .unwrap();
+            max_threads
+        }
+    };
 
     let mut be_quiet: bool = false;
     if !colored::control::SHOULD_COLORIZE.should_colorize() {
@@ -217,6 +231,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     pln!(" n_layers: {}", params.n_layers);
     pln!(" norm_eps: {}", params.norm_eps);
     pln!(" vocab_size: {}", params.vocab_size);
+    pln!("---");
+    pln!(" maximum number of threads: {}", max_threads);
     pln!("---");
     pln!("Max sequence length: {}", max_seq_len);
     pln!("Temperature: {}", token_sampler.get_temperature());
