@@ -4,21 +4,26 @@ This is my attempt at making the LLaMA language model working on a pure Rust
 CPU implementation. I was inspired by an amazing CPU implementation here:
 https://github.com/ggerganov/ggml that could run GPT-J 6B models.
 
-With my crappy OpenCL, this will do around ~240ms on my GTX 3090 per token.
-With pure CPU on Ryzen 3950X and OpenCL, I can get around 700ms per token. And
-without any OpenCL, pure Rust code only, with some of my handwritten AVX2
-intrinsics, about 1 second per token. All on LLaMA-7B.
+The current performance is as follows:
 
-(Scroll to the bottom to see some benchmarks)
+```
+LLaMA-7B:  AMD Ryzen 3950X:                       552ms / token     f16    (pure Rust)
+LLaMA-7B:  AMD Ryzen 3950X:                       1008ms / token    f32    (pure Rust)
+LLaMA-13B: AMD Ryzen 3950X:                       1029ms / token    f16    (pure Rust)
+LLaMA-13B: AMD Ryzen 3950X:                       1930ms / token    f32    (pure Rust)
+LLaMA-30B: AMD Ryzen 5950X:                       2112ms / token    f16    (pure Rust)
 
-I've also managed to run LLaMA-13B which just barely fits in my 64-gig machine
-with 32-bit float weights everywhere.
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  247ms / token            (OpenCL on GPU)
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  680ms / token            (OpenCL on CPU)
+LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <I ran out of GPU memory :(>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token           (OpenCL on CPU)
+LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token           (OpenCL on CPU)
+```
 
-I've managed to run LLaMA-30B on a 128 gigabyte server and it gets around 4
-seconds per token using CPU OpenCL for Ryzen 5950X.
+(Scroll to the bottom to see benchmarks over time).
 
-I have not tried LLaMA-60B but presumably if all the smaller models work it
-would run given a sufficiently chonky computer.
+I have not tried to run LLaMA-60B but I think it would work if you got a big
+enough computer.
 
 It also has a Python unpickler that understands the `.pth` files used by
 PyTorch. Well almost, it doesn't unzip them automatically (see below).
@@ -88,10 +93,7 @@ screenshot below).
 This is a hobby thing for me so don't expect updates or help.
 
 * Some other CPU implementations use quantization to reduce the size of weights
-  and generally speed up everything a lot.
-* Put some of the operations on the OpenCL GPU/CPU. I've made some initial
-  OpenCL code for matrix multiplications but the performance is not competetive
-  with frameworks like PyTorch on GPU.
+  and generally speed up everything a lot. `rllama` does not have this.
 * I've heard there is some thing called Tensor Cores on nVidia GPUs. Not
   accessible with OpenCL. But might be accessible on Vulkan with a an
   extension.
@@ -159,4 +161,5 @@ LLaMA-7B:  AMD Ryzen 3950X: 552ms / token     f16
 LLaMA-7B:  AMD Ryzen 3950X: 1008ms / token    f32
 LLaMA-13B: AMD Ryzen 3950X: 1029ms / token    f16
 LLaMA-13B: AMD Ryzen 3950X: 1930ms / token    f32
+LLaMA-30B: AMD Ryzen 5950X: 2112ms / token    f16
 ```
