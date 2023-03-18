@@ -39,6 +39,9 @@ struct Cli {
     #[arg(long)]
     repetition_penalty: Option<f32>,
 
+    #[arg(long, action)]
+    f16: bool,
+
     #[cfg(feature = "opencl")]
     #[arg(long)]
     opencl_device: Option<usize>,
@@ -154,7 +157,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let max_seq_len = cli.max_seq_len.unwrap_or(1024);
 
-    let data_settings = {
+    let mut data_settings = {
         #[cfg(feature = "opencl")]
         {
             if let Some(opencl) = opencl {
@@ -167,6 +170,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(feature = "opencl"))]
         DataSettings::new()
     };
+
+    if cli.f16 == true {
+        data_settings = data_settings.force_f16();
+    }
 
     pln!("Loading transformer weights from {}...", model_path);
     let tr = Transformer::from_unpickled(

@@ -49,9 +49,10 @@ You should then be ready to generate some text.
 cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B --param-path /path/to/LLaMA/7B/params.json --prompt "The meaning of life is"
 ```
 
-Right now it seems to use around ~25 gigabytes of memory for 7B and around ~50
-gigabytes for 13B. If you don't use OpenCL, then internally all parameters are
-cast to 32-bit floats.
+By default, it will use the weights in the precision they are in the source
+files. You can use `--f16` command line argument to cast the largest weight
+matrices to float16. Also, using OpenCL will also cast the weight matrices to
+float16.
 
 You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
 settings.

@@ -205,6 +205,11 @@ impl Tensor {
         }
     }
 
+    #[inline]
+    pub fn dtype(&self) -> TensorDType {
+        self.dtype
+    }
+
     pub fn from_unpickled<P: AsRef<Path>, S: AsRef<str>>(
         unpickled: &unpickler::Value,
         name: S,
@@ -1014,9 +1019,42 @@ impl Tensor {
         false
     }
 
-    #[cfg(feature = "opencl")]
+    #[cfg(not(feature = "opencl"))]
+    pub fn is_on_gpu(&self) -> bool {
+        false
+    }
+
     pub fn is_on_cpu(&self) -> bool {
         return !self.is_on_gpu();
+    }
+
+    // Casts data type to whatever the other tensors data type is.
+    pub fn to_same_type(&self, other: &Tensor) -> Tensor {
+        let mut result = self.clone();
+        if result.dtype() == other.dtype() {
+            return result;
+        }
+        match other.dtype {
+            TensorDType::Float32 => self.to_f32(),
+            TensorDType::Float16 => self.to_f16(),
+        }
+    }
+
+    pub fn into_same_type(self, other: &Tensor) -> Tensor {
+        if self.dtype() == other.dtype() {
+            return self;
+        }
+        match other.dtype {
+            TensorDType::Float32 => self.to_f32(),
+            TensorDType::Float16 => self.to_f16(),
+        }
+    }
+
+    pub fn into_dtype(self, dtype: TensorDType) -> Tensor {
+        match dtype {
+            TensorDType::Float32 => self.to_f32(),
+            TensorDType::Float16 => self.to_f16(),
+        }
     }
 
     #[cfg(feature = "opencl")]
