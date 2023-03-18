@@ -3,6 +3,7 @@
 pub mod embedding;
 pub mod protomodels;
 pub mod rllama_main;
+pub mod simd_support;
 pub mod tensor;
 #[cfg(feature = "opencl")]
 pub mod tensor_opencl_support;
