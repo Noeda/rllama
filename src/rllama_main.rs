@@ -22,6 +22,9 @@ struct Cli {
     #[arg(long)]
     param_path: String,
 
+    #[arg(short, long, action)]
+    quiet: bool,
+
     #[arg(long)]
     prompt: Option<String>,
     #[arg(long)]
@@ -80,6 +83,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut be_quiet: bool = false;
     if !colored::control::SHOULD_COLORIZE.should_colorize() {
         be_quiet = true;
+    }
+    if cli.quiet {
+        be_quiet = true;
+    }
+    if be_quiet {
+        colored::control::SHOULD_COLORIZE.set_override(false);
     }
 
     #[cfg(feature = "opencl")]
