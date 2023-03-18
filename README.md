@@ -177,7 +177,7 @@ LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <ran out of GPU memory>
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token
 LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token
 
-# commit 3d0afcf24309f28ec540ed7645c35400a865ad6f
+# commit 3d0afcf24309f28ec540ed7645c35400a865ad6f  (17 March 2023)
 # I've been focusing on making the ordinary non-OpenCL CPU implementation
 # faster and I got some gains, most importantly from multithreading.
 # There is Float16 support now, so I've added f16/f32 to these tables:
