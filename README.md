@@ -35,9 +35,18 @@ PyTorch. Well almost, it doesn't unzip them automatically (see below).
 The implementation uses AVX2, even in the OpenCL codepath, so this will only
 run on AMD64 at this time.
 
-# How to run
+# Crates.io Cargo package install
 
-As of March 18, `rllama` is on `crates.io`. You can install it with `cargo install rllama`.
+As of March 18, `rllama` is on `crates.io`. You can install it with `cargo install rllama`. You may need to explicitly enable AVX2 features:
+
+```
+RUSTFLAGS="-C target-feature=+sse2,+avx,+fma,+avx2" cargo install rllama
+```
+
+There is a `.cargo/config.toml` inside this repository that will enable these
+features if you install manually from this Git repository instead.
+
+# How to run
 
 You will need Rust. Make sure you can run `cargo` from a command line. In
 particular, this is using unstable features so you need nightly rust. Make sure
