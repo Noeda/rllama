@@ -4,10 +4,9 @@ RLLaMA is a pure Rust implementation of [LLaMA large language model inference.](
 
 ## Supported features
 
-  * Use either `f16` and `f32` weights.
-  * LLaMA-7B, LLaMA-13B and LLaMA-30B are all confirmed working. LLaMA-65B
-    likely works but I haven't found a big enough computer to run it.
-  * Multithreaded hand-optimized CPU inference
+  * Uses either `f16` and `f32` weights.
+  * LLaMA-7B, LLaMA-13B, LLaMA-30B, LLaMA-65B all confirmed working
+  * Hand-optimized AVX2 implementation
   * OpenCL support for GPU inference.
 
 ## Performance
@@ -22,6 +21,7 @@ LLaMA-7B:  AMD Ryzen 3950X:                       1008ms / token    f32    (pure
 LLaMA-13B: AMD Ryzen 3950X:                       1029ms / token    f16    (pure Rust)
 LLaMA-13B: AMD Ryzen 3950X:                       1930ms / token    f32    (pure Rust)
 LLaMA-30B: AMD Ryzen 5950X:                       2112ms / token    f16    (pure Rust)
+LLaMA-65B: AMD Ryzen 5950X:                       4186ms / token    f16    (pure Rust)
 
 OpenCL (all use f16):
 
@@ -181,10 +181,13 @@ LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token
 # I've been focusing on making the ordinary non-OpenCL CPU implementation
 # faster and I got some gains, most importantly from multithreading.
 # There is Float16 support now, so I've added f16/f32 to these tables:
+#
+# I also managed to run LLaMA-65B for the first time.
 
 LLaMA-7B:  AMD Ryzen 3950X: 552ms / token     f16
 LLaMA-7B:  AMD Ryzen 3950X: 1008ms / token    f32
 LLaMA-13B: AMD Ryzen 3950X: 1029ms / token    f16
 LLaMA-13B: AMD Ryzen 3950X: 1930ms / token    f32
 LLaMA-30B: AMD Ryzen 5950X: 2112ms / token    f16
+LLaMA-65B: AMD Ryzen 5950X: 4186ms / token    f16
 ```
