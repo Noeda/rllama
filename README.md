@@ -7,11 +7,15 @@ https://github.com/ggerganov/ggml that could run GPT-J 6B models.
 The current performance is as follows:
 
 ```
+Pure Rust implementations:
+
 LLaMA-7B:  AMD Ryzen 3950X:                       552ms / token     f16    (pure Rust)
 LLaMA-7B:  AMD Ryzen 3950X:                       1008ms / token    f32    (pure Rust)
 LLaMA-13B: AMD Ryzen 3950X:                       1029ms / token    f16    (pure Rust)
 LLaMA-13B: AMD Ryzen 3950X:                       1930ms / token    f32    (pure Rust)
 LLaMA-30B: AMD Ryzen 5950X:                       2112ms / token    f16    (pure Rust)
+
+OpenCL (all use f16):
 
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  247ms / token            (OpenCL on GPU)
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  680ms / token            (OpenCL on CPU)
