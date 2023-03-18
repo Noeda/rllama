@@ -37,6 +37,8 @@ run on AMD64 at this time.
 
 # How to run
 
+As of March 18, `rllama` is on `crates.io`. You can install it with `cargo install rllama`.
+
 You will need Rust. Make sure you can run `cargo` from a command line. In
 particular, this is using unstable features so you need nightly rust. Make sure
 that if you write `cargo --version` it shows that it is nightly Rust.
