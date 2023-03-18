@@ -32,6 +32,9 @@ enough computer.
 It also has a Python unpickler that understands the `.pth` files used by
 PyTorch. Well almost, it doesn't unzip them automatically (see below).
 
+The implementation uses AVX2, even in the OpenCL codepath, so this will only
+run on AMD64 at this time.
+
 # How to run
 
 You will need Rust. Make sure you can run `cargo` from a command line. In
