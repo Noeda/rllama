@@ -130,6 +130,18 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     );
 
     c.bench_function(
+        "matrix multiplication 8x4096 @ 4096x4096 f16 in-place, transposed",
+        |b| {
+            b.iter(|| {
+                let _ = result_84096_f16.matrix_mul_inplace_transposed(
+                    black_box(&orig_84096_1_f16),
+                    black_box(&orig_84096_2_f16),
+                );
+            })
+        },
+    );
+
+    c.bench_function(
         "matrix multiplication 8x4096 @ 4096x4096 f32 in-place, transposed",
         |b| {
             b.iter(|| {
@@ -142,13 +154,11 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     );
 
     c.bench_function(
-        "matrix multiplication 8x4096 @ 4096x4096 f16 in-place, transposed",
+        "matrix multiplication 8x4096 @ 4096x4096 f32 in-place",
         |b| {
             b.iter(|| {
-                let _ = result_84096_f16.matrix_mul_inplace_transposed(
-                    black_box(&orig_84096_1_f16),
-                    black_box(&orig_84096_2_f16),
-                );
+                let _ = result_84096
+                    .matrix_mul_inplace(black_box(&orig_84096_1), black_box(&orig_84096_2));
             })
         },
     );
@@ -164,16 +174,6 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
             let _ = black_box(&orig_f16).to_f32();
         })
     });
-
-    c.bench_function(
-        "matrix multiplication 8x4096 @ 4096x4096 f32 in-place",
-        |b| {
-            b.iter(|| {
-                let _ = result_84096
-                    .matrix_mul_inplace(black_box(&orig_84096_1), black_box(&orig_84096_2));
-            })
-        },
-    );
 
     c.bench_function("matrix multiplication f32 not in-place", |b| {
         b.iter(|| {

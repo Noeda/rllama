@@ -58,6 +58,7 @@ impl DataSettings {
         }
     }
 
+    #[allow(clippy::new_without_default)]
     #[cfg(not(feature = "opencl"))]
     pub fn new() -> Self {
         DataSettings { force_f16: false }
@@ -147,6 +148,7 @@ pub struct RMSNorm {
     weight: Tensor,
 }
 
+#[allow(dead_code)]
 pub struct Attention {
     wq: Tensor,
     wk: Tensor,

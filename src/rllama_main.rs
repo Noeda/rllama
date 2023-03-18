@@ -171,7 +171,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         DataSettings::new()
     };
 
-    if cli.f16 == true {
+    if cli.f16 {
         data_settings = data_settings.force_f16();
     }
 
