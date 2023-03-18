@@ -1,8 +1,16 @@
 # RLLaMA
 
-This is my attempt at making the LLaMA language model working on a pure Rust
-CPU implementation. I was inspired by an amazing CPU implementation here:
-https://github.com/ggerganov/ggml that could run GPT-J 6B models.
+RLLaMA is a pure Rust implementation of [LLaMA large language model inference.](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/).
+
+## Supported features
+
+  * Use either `f16` and `f32` weights.
+  * LLaMA-7B, LLaMA-13B and LLaMA-30B are all confirmed working. LLaMA-65B
+    likely works but I haven't found a big enough computer to run it.
+  * Multithreaded hand-optimized CPU inference
+  * OpenCL support for GPU inference.
+
+## Performance
 
 The current performance is as follows:
 
@@ -24,20 +32,16 @@ LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token           (Open
 LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token           (OpenCL on CPU)
 ```
 
-(Scroll to the bottom to see benchmarks over time).
+Scroll to the bottom of this README.md to see benchmarks over time.
 
-I have not tried to run LLaMA-60B but I think it would work if you got a big
-enough computer.
+## Screenshot
 
-It also has a Python unpickler that understands the `.pth` files used by
-PyTorch. Well almost, it doesn't unzip them automatically (see below).
+![Screenshot of RLLaMA in action](rllama.gif)
 
-The implementation uses AVX2, even in the OpenCL codepath, so this will only
-run on AMD64 at this time.
+## Install
 
-# Crates.io Cargo package install
-
-As of March 18, `rllama` is on `crates.io`. You can install it with `cargo install rllama`. You may need to explicitly enable AVX2 features:
+You can install with `cargo` tool. RLLaMA uses intrinsics extensively and you
+likely need to enable them to install the executable.
 
 ```
 RUSTFLAGS="-C target-feature=+sse2,+avx,+fma,+avx2" cargo install rllama
@@ -46,55 +50,60 @@ RUSTFLAGS="-C target-feature=+sse2,+avx,+fma,+avx2" cargo install rllama
 There is a `.cargo/config.toml` inside this repository that will enable these
 features if you install manually from this Git repository instead.
 
-# How to run
+## LLaMA weights
 
-You will need Rust. Make sure you can run `cargo` from a command line. In
-particular, this is using unstable features so you need nightly rust. Make sure
-that if you write `cargo --version` it shows that it is nightly Rust.
+Refer to https://github.com/facebookresearch/llama/ As of now, you need to be
+approved to get weights.
 
-You will need to download LLaMA-7B weights. Refer to https://github.com/facebookresearch/llama/
-
-Once you have 7B weights, and the `tokenizer.model` it comes with, you need to
-decompress it.
+For LLaMA-7B make sure, you got these files:
 
 ```shell
-$ cd LLaMA
+* 7B/consolidated.00.pth
+* 7B/params.json
+* tokenizer.model
+```
+
+The `consolidated.00.pth` is actually a zip file. You need to unzip it:
+
+```shell
 $ cd 7B
 $ unzip consolidated.00.pth
-# For LLaMA-7B, rename consolidated to consolidated.00
-# For the larger models, the number is there already so no need to do this step.
 $ mv consolidated consolidated.00
 ```
 
-You should then be ready to generate some text.
+If you are using a larger model like LLaMA-13B, then you can skip the last step
+of renaming the `consolidated` directory.
+
+You should now be ready to generate some text.
+
+## Example
+
+Run LLaMA-7B with some weights casted to 16-bit floats:
 
 ```shell
-cargo run --release -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B --param-path /path/to/LLaMA/7B/params.json --prompt "The meaning of life is"
+rllama --tokenizer-model /path/to/tokenizer.model \
+       --model-path /path/to/LLaMA/7B \
+       --param-path /path/to/LLaMA/7B/params.json \
+       --f16 \
+       --prompt "The meaning of life is"
 ```
 
-By default, it will use the weights in the precision they are in the source
-files. You can use `--f16` command line argument to cast the largest weight
-matrices to float16. Also, using OpenCL will also cast the weight matrices to
-float16.
+Use `rllama --help` to see all the options.
 
-You can use `--temperature`, `--top-p` and `--top-k` to adjust token sampler
-settings.
-
-There is `--repetition-penalty` setting. 1.0 means no penalty. This value
-likely should be between 0 and 1. Values smaller than 1.0 give a penalty to
-tokens that appear in the context, by
-`x*(repetitition_penalty^num_occurrences)` before applying `softmax()` on the
-output probabilities. Or in other words, values smaller than 1.0 apply penalty.
-
-You can also use `--prompt-file` to read the prompt from a file instead from
-the command line.
-
-# How to turn on OpenCL
+## How to turn on OpenCL
 
 Use `opencl` Cargo feature.
 
 ```
-cargo run --release --features opencl -- --tokenizer-model /path/to/tokenizer.model --model-path /path/to/LLaMA/7B --param-path /path/to/LLaMA/7B/params.json --prompt "The meaning of life is"
+RUSTFLAGS="-C target-feature=+sse2,+avx,+fma,+avx2" cargo install rllama --features opencl
+```
+
+```
+rllama --tokenizer-model /path/to/tokenizer.model \
+       --model-path /path/to/LLaMA/7B \
+       --param-path /path/to/LLaMA/7B/params.json \
+       --opencl-device 0 \
+       --prompt "The meaning of life is"
 ```
 
 With `opencl` feature, there is also another argument, `--opencl-device` that
@@ -102,11 +111,9 @@ takes a number. That number selects Nth OpenCL device found on the system. You
 can see the devices in the output when you run the program (e.g. see the
 screenshot below).
 
-# Screenshot
+Weights are always cast to 16-bit floats for OpenCL.
 
-![Screenshot of RLLaMA in action](rllama.png)
-
-# Notes and future plans
+## Notes and future plans
 
 This is a hobby thing for me so don't expect updates or help.
 
@@ -126,7 +133,7 @@ This is a hobby thing for me so don't expect updates or help.
 * Stanford released some instruct-finetuned LLaMA-7B, once I find the weights
   then I'd like to try make a chat-like command-line interface.
 
-# Benchmarks
+## Benchmarks
 
 I'm trying to track that I'm making this faster and not slower.
 
