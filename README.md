@@ -8,6 +8,8 @@ RLLaMA is a pure Rust implementation of [LLaMA large language model inference.](
   * LLaMA-7B, LLaMA-13B, LLaMA-30B, LLaMA-65B all confirmed working
   * Hand-optimized AVX2 implementation
   * OpenCL support for GPU inference.
+  * Simple HTTP API support, with the possibility of doing token sampling on
+    client side
 
 ## Performance
 
