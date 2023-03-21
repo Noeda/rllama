@@ -90,6 +90,92 @@ rllama --tokenizer-model /path/to/tokenizer.model \
 
 Use `rllama --help` to see all the options.
 
+## Inference server
+
+`rllama` can run in an inference server mode with a simple HTTP JSON API.
+
+The command line flags for this are:
+
+  * `--inference-server` using this will turn on the inference server.
+  * `--inference-server-port` sets the port. Default port is 8080.
+  * `--inference-server-host` sets the host. The default host is 127.0.0.1.
+  * `--inference-server-max-concurrent-inferences` sets how many concurrent
+    requests are allowed to be actively doing inference at the same time. The
+    default is 5.
+  * `--inference-server-api-path` sets which path servers the API requests. The
+    default path is `/rllama/v1/inference`
+  * `--inference-server-prompt-cache-size` sets how many previous prompt
+    calculations should be cached. Default is 1000. This speeds up token
+    generation for prompts that were already requested before.
+
+Prompts and flags related to token sampling are all ignored in inference server
+mode. Instead, they are obtained from each HTTP JSON API request.
+
+### Inference server API
+
+There is an `examples/api_hello_world.py` for a minimal API use example.
+
+```
+POST /rllama/v1/inference
+```
+
+Expects a JSON body and `Accept: application/json` or `Accept: text/jsonl`.
+
+The expected JSON is as follows:
+
+```json
+  {
+     "temperature":        <number, optional>
+     "top_k":              <integer, optional, default 20>
+     "top_p":              <number, optional, default: 1.0>
+     "repetition_penalty": <number, optional, default: 1.0>
+     "stop_at_end_token":  <bool, optional, default: true>
+     "max_seq_len":        <integer, optional, default: 1024. Clamped to
+                            be at highest the same as --max-seq-len command line option.>
+     "max_new_tokens":     <integer, optional, default: 1024>
+     "no_token_sampling":  <bool, optional, default: false>
+     "prompt":             <string, required>
+  }
+```
+
+The form of the response depends on if `no_token_sampling` is set to true or false. The
+response is in JSONL, i.e. multiple JSON dictionaries, separated by newlines.
+
+`no_token_sampling` can turn off `rllama`'s own token sampling. In this case,
+the probabilities for every token are returned instead.
+
+When no\_token\_sampling = false:
+
+```json
+{<token string>: {"p": <number>, "is_end_token": bool, might not be present}}
+```
+
+  * `token` contains the new token to be appended to output. It does not
+    include string you fed to the system originally.
+  * `p` is the probability that this token was chosen. For example, if this
+    value is 0.1, it means that this particular token had 10% chance of being
+    selected with the current token sampling settings.
+  * `is_end_token` is `true` is the given token signifies end of output. This
+    field is not present otherwise.
+
+When no\_token\_sampling = true:
+
+```json
+{<token string>: {"p": <number>, "is_end_token": bool, might not be present} \
+,<token string>: {"p": <number>, "is_end_token": bool, might not be present} \
+,...}
+```
+
+Tokens where `p = 0` will not be present in the JSON output.
+
+If you want to implement your own token sampling, you may want to set
+`max_new_tokens=1` and `stop_at_end_token=false` to suppress rllama's own
+sampling behavior entirely.
+
+`rllama` internally caches recently queried prompts and the intermediate
+computations so that it's able to continue off quickly if you issue a query
+that is either the same as a previous query or a continuation of one.
+
 ## How to turn on OpenCL
 
 Use `opencl` Cargo feature.

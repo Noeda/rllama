@@ -23,6 +23,7 @@ use crate::tensor_opencl_support::{OpenCL, OpenCLError, OpenCLEvent, OpenCLTenso
 use crate::unpickler;
 use crate::unpickler::UnpicklingError;
 use half::f16;
+use lazy_static::lazy_static;
 use rand::Rng;
 use rayon::prelude::*;
 use std::alloc::Layout;
@@ -123,12 +124,21 @@ impl Clone for Tensor {
     }
 }
 
+// Tracks how many bytes are allocated for tensors globally on CPU.
+// I've used this to debug memory leaks and monitor memory usage.
+lazy_static! {
+    static ref TENSORS_BYTES_ALLOCATED: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
+
 impl Drop for Tensor {
     fn drop(&mut self) {
         #[cfg(feature = "opencl")]
         self.process_waiting_for_data_mut();
         unsafe {
             if !self.data.is_null() {
+                TENSORS_BYTES_ALLOCATED
+                    .fetch_sub(self.layout.size(), std::sync::atomic::Ordering::Relaxed);
                 std::alloc::dealloc(self.data, self.layout);
             }
         }
@@ -342,6 +352,7 @@ impl Tensor {
         if data.is_null() {
             panic!("Failed to allocate tensor");
         }
+        TENSORS_BYTES_ALLOCATED.fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
         // Even though we are uninitialized, we should zero out the extra space between the
         // columns.
         // Otherwise there might be problems later as other operations assume it is zeroed.
@@ -1384,12 +1395,14 @@ impl Tensor {
                                                         as *const I16x8,
                                                 ),
                                             )
-                                        } else {
+                                        } else if row < nrows {
                                             (
                                                 load_i16x8(ptr.add(row * cols_capacity + column)
                                                     as *const I16x8),
                                                 i16x8_zero(),
                                             )
+                                        } else {
+                                            (i16x8_zero(), i16x8_zero())
                                         };
                                         let left: F32x8 = i16x8_as_f16_to_f32x8(left);
                                         let right: F32x8 = i16x8_as_f16_to_f32x8(right);
@@ -1840,6 +1853,7 @@ impl Tensor {
         if data.is_null() {
             panic!("Failed to allocate tensor");
         }
+        TENSORS_BYTES_ALLOCATED.fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
         Self {
             data,
             #[cfg(feature = "opencl")]
@@ -2005,6 +2019,7 @@ impl Tensor {
         if data.is_null() {
             panic!("to_cpu_inplace: Failed to allocate tensor");
         }
+        TENSORS_BYTES_ALLOCATED.fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
         let ev = od.as_mut().unwrap().data_u16_from_gpu(data as *mut u16)?;
         self.data = data as *mut u16 as *mut u8;
         self.waiting_for_data = Some(ev);

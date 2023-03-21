@@ -65,6 +65,21 @@ impl TokenSampler {
         }
     }
 
+    pub fn logits_to_btreemap(
+        &self,
+        logits: &Tensor,
+        tokenizer: &Tokenizer,
+    ) -> BTreeMap<String, f32> {
+        let mut result = BTreeMap::new();
+        for token_idx in 0..logits.rows() {
+            result.insert(
+                tokenizer.id_to_str(token_idx as TokenId).to_string(),
+                logits.get_f32(token_idx, 0),
+            );
+        }
+        result
+    }
+
     pub fn sample(
         &self,
         logits: &Tensor,

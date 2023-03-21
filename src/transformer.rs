@@ -28,6 +28,8 @@ pub struct Transformer {
     output: Tensor,
 
     layers: Vec<TransformerBlock>,
+
+    data_settings: DataSettings,
 }
 
 // Clone is cheap
@@ -94,25 +96,59 @@ pub struct TransformerBlock {
 pub struct AttentionCache {
     cache_k: Vec<Arc<RwLock<Tensor>>>,
     cache_v: Vec<Arc<RwLock<Tensor>>>,
+    data_settings: DataSettings,
 }
 
 impl AttentionCache {
-    fn new(max_seq_len: usize, n_local_heads: usize, head_dim: usize) -> Self {
+    fn new(
+        max_seq_len: usize,
+        n_local_heads: usize,
+        head_dim: usize,
+        data_settings: &DataSettings,
+    ) -> Self {
         let mut cache_k = Vec::with_capacity(n_local_heads);
         let mut cache_v = Vec::with_capacity(n_local_heads);
+
+        let dtype = if data_settings.force_f16 {
+            TensorDType::Float16
+        } else {
+            TensorDType::Float32
+        };
         for _ in 0..n_local_heads {
             cache_k.push(Arc::new(RwLock::new(Tensor::zeros(
                 head_dim as i64,
                 max_seq_len as i64,
-                TensorDType::Float32,
+                dtype,
             ))));
             cache_v.push(Arc::new(RwLock::new(Tensor::zeros(
                 head_dim as i64,
                 max_seq_len as i64,
-                TensorDType::Float32,
+                dtype,
             ))));
         }
-        AttentionCache { cache_k, cache_v }
+        AttentionCache {
+            cache_k,
+            cache_v,
+            data_settings: data_settings.clone(),
+        }
+    }
+
+    /// Cloning AttentionCache normally just makes new references to the same cache.
+    /// This creates a true clone with copied tensors.
+    fn true_clone(&self) -> AttentionCache {
+        let mut cache_k = Vec::with_capacity(self.cache_k.len());
+        let mut cache_v = Vec::with_capacity(self.cache_v.len());
+        for idx in 0..self.cache_k.len() {
+            let old_k = self.cache_k[idx].read().unwrap();
+            cache_k.push(Arc::new(RwLock::new(old_k.clone())));
+            let old_v = self.cache_v[idx].read().unwrap();
+            cache_v.push(Arc::new(RwLock::new(old_v.clone())));
+        }
+        AttentionCache {
+            cache_k,
+            cache_v,
+            data_settings: self.data_settings.clone(),
+        }
     }
 
     fn shift_left(&mut self, shifts: usize) {
@@ -140,6 +176,14 @@ impl TransformerCaches {
         for layer in self.layer_caches.iter_mut() {
             layer.shift_left(shifts);
         }
+    }
+
+    pub fn true_clone(&self) -> TransformerCaches {
+        let mut layer_caches = Vec::with_capacity(self.layer_caches.len());
+        for layer in self.layer_caches.iter() {
+            layer_caches.push(layer.true_clone());
+        }
+        TransformerCaches { layer_caches }
     }
 }
 
@@ -218,6 +262,7 @@ impl Transformer {
 
         Ok(Transformer {
             freqs_cis: compute_freqs_cis(dim / n_heads, max_seq_len, 10000.0),
+            data_settings: data_settings.clone(),
             emb,
             dim,
             n_layers,
@@ -240,6 +285,7 @@ impl Transformer {
                 self.max_seq_len,
                 self.n_local_heads,
                 self.head_dim,
+                &self.data_settings,
             ));
         }
         TransformerCaches {
@@ -663,6 +709,9 @@ impl Attention {
                 }
                 let keys = cache_k.clip_cols(start_pos + seq_len as usize);
                 let values = cache_v.clip_cols(start_pos + seq_len as usize);
+
+                let keys = keys.into_same_type(&xq_row);
+                let values = values.into_same_type(&xq_row);
 
                 let m = xq_row
                     .matrix_mul(&keys)
