@@ -2019,7 +2019,7 @@ impl Tensor {
         if data.is_null() {
             panic!("to_cpu_inplace: Failed to allocate tensor");
         }
-        TENSORS_BYTES_ALLOCATED.fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
+        TENSORS_BYTES_ALLOCATED.fetch_add(self.layout.size(), std::sync::atomic::Ordering::Relaxed);
         let ev = od.as_mut().unwrap().data_u16_from_gpu(data as *mut u16)?;
         self.data = data as *mut u16 as *mut u8;
         self.waiting_for_data = Some(ev);
