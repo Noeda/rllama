@@ -105,8 +105,9 @@ The command line flags for this are:
   * `--inference-server-api-path` sets which path servers the API requests. The
     default path is `/rllama/v1/inference`
   * `--inference-server-prompt-cache-size` sets how many previous prompt
-    calculations should be cached. Default is 1000. This speeds up token
-    generation for prompts that were already requested before.
+    calculations should be cached. Default is 50. This speeds up token
+    generation for prompts that were already requested before, however it also
+    increases memory use as the cache gets more full.
 
 Prompts and flags related to token sampling are all ignored in inference server
 mode. Instead, they are obtained from each HTTP JSON API request.
@@ -123,7 +124,7 @@ Expects a JSON body and `Accept: application/json` or `Accept: text/jsonl`.
 
 The expected JSON is as follows:
 
-```json
+```
   {
      "temperature":        <number, optional>
      "top_k":              <integer, optional, default 20>
@@ -146,7 +147,7 @@ the probabilities for every token are returned instead.
 
 When no\_token\_sampling = false:
 
-```json
+```
 {<token string>: {"p": <number>, "is_end_token": bool, might not be present}}
 ```
 
@@ -160,13 +161,11 @@ When no\_token\_sampling = false:
 
 When no\_token\_sampling = true:
 
-```json
+```
 {<token string>: {"p": <number>, "is_end_token": bool, might not be present} \
 ,<token string>: {"p": <number>, "is_end_token": bool, might not be present} \
 ,...}
 ```
-
-Tokens where `p = 0` will not be present in the JSON output.
 
 If you want to implement your own token sampling, you may want to set
 `max_new_tokens=1` and `stop_at_end_token=false` to suppress rllama's own
