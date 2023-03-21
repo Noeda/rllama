@@ -94,7 +94,12 @@ Use `rllama --help` to see all the options.
 
 ## Inference server
 
-`rllama` can run in an inference server mode with a simple HTTP JSON API.
+`rllama` can run in an inference server mode with a simple HTTP JSON API. You
+need to enable `server` features for this.
+
+```
+cargo build --release --features server
+```
 
 The command line flags for this are:
 
