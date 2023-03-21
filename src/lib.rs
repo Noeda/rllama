@@ -13,6 +13,7 @@ pub mod token_sampler;
 pub mod tokenizer;
 pub mod transformer;
 pub mod unpickler;
+pub mod weight_compression;
 #[cfg(feature = "server")]
 #[macro_use]
 extern crate rocket;

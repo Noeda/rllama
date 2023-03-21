@@ -46,6 +46,7 @@ pub struct TensorBuilder {
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TensorDType {
+    K4BitQuantization,
     Float16,
     Float32,
 }
@@ -70,10 +71,17 @@ pub enum TensorError {
 }
 
 impl TensorDType {
-    pub fn bytes_per_item(&self) -> usize {
+    pub fn bytes_for_nvalues(&self, nvalues: usize) -> usize {
         match self {
-            Self::Float16 => 2,
-            Self::Float32 => 4,
+            Self::K4BitQuantization => {
+                if nvalues % 2 == 1 {
+                    nvalues / 2 + 1
+                } else {
+                    nvalues / 2
+                }
+            }
+            Self::Float16 => nvalues * 2,
+            Self::Float32 => nvalues * 4,
         }
     }
 }
@@ -81,6 +89,11 @@ impl TensorDType {
 #[derive(Debug)]
 pub struct Tensor {
     data: *mut u8,
+
+    // for quantization, only used if dtype == TensorDType::K4BitQuantization
+    // Contains 16 values per row in f16 (i.e. 32 bytes per row)
+    q4_data: *mut u8,
+
     #[cfg(feature = "opencl")]
     opencl_data: Arc<RwLock<Option<OpenCLTensor>>>,
     #[cfg(feature = "opencl")]
@@ -88,6 +101,7 @@ pub struct Tensor {
 
     dtype: TensorDType,
     layout: Layout,
+    q4_layout: Layout,
     rows: i64,
     cols: i64,
     // Every matrix is allocated so that cols are rounded to the next multiple of 32.
@@ -117,8 +131,16 @@ impl Clone for Tensor {
             std::ptr::copy_nonoverlapping(
                 self.data,
                 new_tensor.data,
-                (self.rows * self.capacity_cols * self.dtype.bytes_per_item() as i64) as usize,
+                (self.rows * self.dtype.bytes_for_nvalues(self.capacity_cols as usize) as i64)
+                    as usize,
             );
+            if !self.q4_data.is_null() {
+                std::ptr::copy_nonoverlapping(
+                    self.q4_data,
+                    new_tensor.q4_data,
+                    self.q4_layout.size(),
+                );
+            }
             new_tensor
         }
     }
@@ -140,6 +162,9 @@ impl Drop for Tensor {
                 TENSORS_BYTES_ALLOCATED
                     .fetch_sub(self.layout.size(), std::sync::atomic::Ordering::Relaxed);
                 std::alloc::dealloc(self.data, self.layout);
+            }
+            if !self.q4_data.is_null() {
+                std::alloc::dealloc(self.q4_data, self.q4_layout);
             }
         }
     }
@@ -164,8 +189,17 @@ impl WrappedPtr {
 
 fn compute_capacity_cols(dtype: TensorDType, cols: i64) -> i64 {
     match dtype {
+        TensorDType::K4BitQuantization => compute_capacity_cols_k4(cols),
         TensorDType::Float16 => compute_capacity_cols_f16(cols),
         TensorDType::Float32 => compute_capacity_cols_f32(cols),
+    }
+}
+
+fn compute_capacity_cols_k4(cols: i64) -> i64 {
+    if cols % 64 == 0 {
+        cols
+    } else {
+        cols + 64 - cols % 64
     }
 }
 
@@ -277,6 +311,7 @@ impl Tensor {
 
         let idx = row * self.capacity_cols + col;
         match self.dtype {
+            TensorDType::K4BitQuantization => unimplemented!(),
             TensorDType::Float16 => {
                 let val: f16 = unsafe { *(self.data.add(idx as usize * 2) as *const f16) };
                 val.to_f32()
@@ -294,6 +329,7 @@ impl Tensor {
         self.assume_on_cpu();
         let idx = row * self.capacity_cols + col;
         match self.dtype {
+            TensorDType::K4BitQuantization => unimplemented!(),
             TensorDType::Float16 => {
                 let val: f16 = f16::from_f32(val);
                 unsafe { *(self.data.add(idx as usize * 2) as *mut f16) = val };
@@ -323,12 +359,14 @@ impl Tensor {
     pub fn empty() -> Self {
         Self {
             data: std::ptr::null_mut(),
+            q4_data: std::ptr::null_mut(),
             #[cfg(feature = "opencl")]
             opencl_data: Arc::new(RwLock::new(None)),
             #[cfg(feature = "opencl")]
             waiting_for_data: None,
             dtype: TensorDType::Float16,
-            layout: Layout::from_size_align(0, 0).unwrap(),
+            layout: Layout::from_size_align(1, 1).unwrap(),
+            q4_layout: Layout::from_size_align(1, 1).unwrap(),
             rows: 0,
             cols: 0,
             capacity_cols: 0,
@@ -346,8 +384,7 @@ impl Tensor {
         // Rouns up cols to 8
         let capacity_cols = compute_capacity_cols(dtype, cols);
         let nitems = rows * capacity_cols;
-        let layout =
-            Layout::from_size_align((nitems as usize) * dtype.bytes_per_item(), 32).unwrap();
+        let layout = Layout::from_size_align(dtype.bytes_for_nvalues(nitems as usize), 32).unwrap();
         let data = unsafe { std::alloc::alloc(layout) };
         if data.is_null() {
             panic!("Failed to allocate tensor");
@@ -360,6 +397,7 @@ impl Tensor {
             for row in 0..rows {
                 let idx = row * capacity_cols + extra_col;
                 match dtype {
+                    TensorDType::K4BitQuantization => unimplemented!(),
                     TensorDType::Float16 => {
                         let val: f16 = f16::from_f32(0.0);
                         unsafe { *(data.add(idx as usize * 2) as *mut f16) = val };
@@ -373,6 +411,7 @@ impl Tensor {
 
         Self {
             data,
+            q4_data: std::ptr::null_mut(),
             #[cfg(feature = "opencl")]
             opencl_data: Arc::new(RwLock::new(None)),
             #[cfg(feature = "opencl")]
@@ -382,6 +421,7 @@ impl Tensor {
             cols,
             capacity_cols,
             layout,
+            q4_layout: Layout::from_size_align(1, 1).unwrap(),
         }
     }
 
@@ -889,6 +929,7 @@ impl Tensor {
         }
 
         match src.dtype {
+            TensorDType::K4BitQuantization => unimplemented!(),
             TensorDType::Float32 => {
                 // not actual cache line size, but this represents 8 floats which is the number we can
                 // operate with AVX2
@@ -1043,6 +1084,7 @@ impl Tensor {
             return result;
         }
         match other.dtype {
+            TensorDType::K4BitQuantization => unimplemented!(),
             TensorDType::Float32 => self.to_f32(),
             TensorDType::Float16 => self.to_f16(),
         }
@@ -1053,6 +1095,7 @@ impl Tensor {
             return self;
         }
         match other.dtype {
+            TensorDType::K4BitQuantization => unimplemented!(),
             TensorDType::Float32 => self.to_f32(),
             TensorDType::Float16 => self.to_f16(),
         }
@@ -1060,6 +1103,7 @@ impl Tensor {
 
     pub fn into_dtype(self, dtype: TensorDType) -> Tensor {
         match dtype {
+            TensorDType::K4BitQuantization => unimplemented!(),
             TensorDType::Float32 => self.to_f32(),
             TensorDType::Float16 => self.to_f16(),
         }
@@ -1114,6 +1158,7 @@ impl Tensor {
         }
 
         match src.dtype {
+            TensorDType::K4BitQuantization => unimplemented!(),
             TensorDType::Float32 => {
                 const ITEMS_PER_LINE: usize = 8;
 
@@ -1847,8 +1892,7 @@ impl Tensor {
         }
         let capacity_cols = compute_capacity_cols(dtype, cols);
         let nitems = rows * capacity_cols;
-        let layout =
-            Layout::from_size_align((nitems as usize) * dtype.bytes_per_item(), 32).unwrap();
+        let layout = Layout::from_size_align(dtype.bytes_for_nvalues(nitems as usize), 32).unwrap();
         let data = unsafe { std::alloc::alloc_zeroed(layout) };
         if data.is_null() {
             panic!("Failed to allocate tensor");
@@ -1856,6 +1900,7 @@ impl Tensor {
         TENSORS_BYTES_ALLOCATED.fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
         Self {
             data,
+            q4_data: std::ptr::null_mut(),
             #[cfg(feature = "opencl")]
             opencl_data: Arc::new(RwLock::new(None)),
             #[cfg(feature = "opencl")]
@@ -1865,6 +1910,7 @@ impl Tensor {
             cols,
             capacity_cols,
             layout,
+            q4_layout: Layout::from_size_align(1, 1).unwrap(),
         }
     }
 
@@ -1880,12 +1926,14 @@ impl Tensor {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     self.data.add(
-                        (row * self.capacity_cols * self.dtype.bytes_per_item() as i64) as usize,
+                        (row * self.dtype.bytes_for_nvalues(self.capacity_cols as usize) as i64)
+                            as usize,
                     ),
                     result.data.add(
-                        (row * result.capacity_cols * self.dtype.bytes_per_item() as i64) as usize,
+                        (row * self.dtype.bytes_for_nvalues(result.capacity_cols as usize) as i64)
+                            as usize,
                     ),
-                    cols * self.dtype.bytes_per_item(),
+                    self.dtype.bytes_for_nvalues(cols),
                 );
             }
         }
@@ -1908,6 +1956,7 @@ impl Tensor {
             result.rows = rows;
             result.cols = cols;
             match self.dtype {
+                TensorDType::K4BitQuantization => unimplemented!(),
                 TensorDType::Float16 => {
                     let mut tgt_row: usize = 0;
                     let mut tgt_col: usize = 0;
@@ -2154,9 +2203,9 @@ impl Tensor {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 self.data
-                    .add((row * self.capacity_cols) as usize * self.dtype.bytes_per_item()),
+                    .add(row as usize * self.dtype.bytes_for_nvalues(self.capacity_cols as usize)),
                 result.data,
-                self.cols as usize * self.dtype.bytes_per_item(),
+                self.dtype.bytes_for_nvalues(self.cols as usize),
             );
         }
         result
@@ -2187,16 +2236,16 @@ impl TensorBuilder {
 
         let mut f = std::fs::File::open(&path).unwrap();
         f.seek(std::io::SeekFrom::Start(
-            (self.offset as u64) * self.dtype.bytes_per_item() as u64,
+            self.dtype.bytes_for_nvalues(self.offset as usize) as u64,
         ))?;
         let mut cursor: usize = 0;
-        let mut buf: Vec<u8> = vec![0; self.cols as usize * self.dtype.bytes_per_item()];
+        let mut buf: Vec<u8> = vec![0; self.dtype.bytes_for_nvalues(self.cols as usize)];
         for _row in 0..self.rows {
             f.read_exact(&mut buf)?;
             unsafe {
                 std::ptr::copy_nonoverlapping(buf.as_ptr(), tensor.data.add(cursor), buf.len());
             }
-            cursor += tensor.capacity_cols as usize * self.dtype.bytes_per_item();
+            cursor += self.dtype.bytes_for_nvalues(tensor.capacity_cols as usize);
         }
         Ok(tensor.to_f32())
     }
@@ -2251,10 +2300,10 @@ impl TensorBuilder {
                     .join("data")
                     .join(&builder.src_path);
                 buf.truncate(0);
-                buf.resize(builder.cols as usize * builder.dtype.bytes_per_item(), 0);
+                buf.resize(builder.dtype.bytes_for_nvalues(builder.cols as usize), 0);
                 let mut f = std::fs::File::open(&path).unwrap();
                 f.seek(std::io::SeekFrom::Start(
-                    (builder.offset as u64) * builder.dtype.bytes_per_item() as u64,
+                    builder.dtype.bytes_for_nvalues(builder.offset as usize) as u64,
                 ))?;
                 for row in 0..builder.rows {
                     match f.read_exact(&mut buf) {
@@ -2275,10 +2324,9 @@ impl TensorBuilder {
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             buf.as_ptr(),
-                            tensor.data.add(
-                                ((row * tensor.capacity_cols + col_offset) as usize)
-                                    * builder.dtype.bytes_per_item(),
-                            ),
+                            tensor.data.add(builder.dtype.bytes_for_nvalues(
+                                (row * tensor.capacity_cols + col_offset) as usize,
+                            )),
                             buf.len(),
                         );
                     }
@@ -2326,10 +2374,10 @@ impl TensorBuilder {
                     .join("data")
                     .join(&builder.src_path);
                 buf.truncate(0);
-                buf.resize(builder.cols as usize * builder.dtype.bytes_per_item(), 0);
+                buf.resize(builder.dtype.bytes_for_nvalues(builder.cols as usize), 0);
                 let mut f = std::fs::File::open(&path).unwrap();
                 f.seek(std::io::SeekFrom::Start(
-                    (builder.offset as u64) * builder.dtype.bytes_per_item() as u64,
+                    builder.dtype.bytes_for_nvalues(builder.offset as usize) as u64,
                 ))?;
                 for row in 0..builder.rows {
                     match f.read_exact(&mut buf) {
@@ -2350,10 +2398,9 @@ impl TensorBuilder {
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             buf.as_ptr(),
-                            tensor.data.add(
-                                (((row + row_offset) * tensor.capacity_cols) as usize)
-                                    * builder.dtype.bytes_per_item(),
-                            ),
+                            tensor.data.add(builder.dtype.bytes_for_nvalues(
+                                ((row + row_offset) * tensor.capacity_cols) as usize,
+                            )),
                             buf.len(),
                         );
                     }

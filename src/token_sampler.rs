@@ -158,7 +158,11 @@ impl TokenSampler {
             total_p += v.1;
         }
         let mut rng = rand::thread_rng();
-        let p: f32 = rng.gen_range(0.0..=total_p);
+        let p: f32 = if total_p > 0.0 {
+            rng.gen_range(0.0..=total_p)
+        } else {
+            0.0
+        };
         p_accum = 0.0;
         for v in logitsf.into_iter() {
             p_accum += v.1;

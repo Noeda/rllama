@@ -415,6 +415,7 @@ impl RMSNorm {
             FromPiecesDirection::Rows,
         )?
         .to_f32();
+
         Ok(Self {
             eps,
             weight: weights,
