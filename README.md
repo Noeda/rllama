@@ -115,6 +115,9 @@ The command line flags for this are:
     calculations should be cached. Default is 50. This speeds up token
     generation for prompts that were already requested before, however it also
     increases memory use as the cache gets more full.
+  * `--inference-server-exit-after-one-query` will make the server exit with
+    exit code 0 after it has served one HTTP query. This is used for
+    troubleshooting and experiments.
 
 Prompts and flags related to token sampling are all ignored in inference server
 mode. Instead, they are obtained from each HTTP JSON API request.
