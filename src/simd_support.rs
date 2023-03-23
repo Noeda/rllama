@@ -314,9 +314,11 @@ pub fn horizontal_sum_and_f32_to_f16(mut ymm: __m256) -> f16 {
 
 /// Prints a binary representation of i16x8 to stdout in this form:
 ///
+/// ```ignore
 ///       0                 0                 0               0
 ///     0x0000           0x0000           0x0000           0x0000
 /// 0000000000000000 0000000000000000 0000000000000000 0000000000000000 etc.
+/// ```
 ///
 /// decimal on first line, hex on second, binary on third.
 pub fn print_i16x8(a: I16x8) {
