@@ -113,6 +113,7 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     let m2_f16 = m2.to_f16();
 
     let quant = m1.quantize();
+    let quant2 = m2.quantize();
 
     c.bench_function(
         "1024x128 * 1x128 matrix vector transposed multiplication, k4 quantized * f32",
@@ -122,9 +123,17 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
             })
         },
     );
+    c.bench_function(
+        "1024x128 * 1x128 matrix vector transposed multiplication, f32 quantized * k4",
+        |b| {
+            b.iter(|| {
+                let _ = m1.matrix_vector_mul_transposed(black_box(&quant2));
+            })
+        },
+    );
 
     c.bench_function(
-        "matrix multiplication 8x4096 @ 4096x4096 k8 quantized * f32 in-place, transposed",
+        "matrix multiplication 8x4096 @ 4096x4096 k4 quantized * f32 in-place, transposed",
         |b| {
             b.iter(|| {
                 let _ = result_84096.matrix_mul_inplace_transposed(

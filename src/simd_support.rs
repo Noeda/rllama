@@ -266,11 +266,6 @@ pub fn shift_right_by_64_i128(a: I16x8) -> I16x8 {
     unsafe { _mm_srli_si128(a, 64 / 8) }
 }
 
-// Shuffle/premute
-pub fn shuffle_i16x8(a: I16x8, permutation: I16x8) -> I16x8 {
-    unsafe { _mm_shuffle_epi8(a, permutation) }
-}
-
 // Extends 8 i8 values into 7 i16 values
 //
 // XXYYZZ -> 00XX00YY00ZZ
