@@ -12,9 +12,6 @@ pub fn quantize(tensor: &Tensor) -> Tensor {
     let mut result = Tensor::zeros(tensor.rows(), tensor.cols(), tensor.dtype());
     for row in 0..tensor.rows() {
         let mut values: Vec<f32> = Vec::with_capacity(tensor.cols() as usize);
-        if row % 500 == 0 {
-            println!("{}", row,);
-        }
         values.truncate(0);
         let mut mi: f32 = std::f32::MAX;
         let mut ma: f32 = std::f32::MIN;

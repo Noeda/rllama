@@ -97,6 +97,7 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
 
     let orig_84096_1 = Tensor::zeros(8, 4096, TensorDType::Float32);
     let orig_84096_2 = Tensor::zeros(4096, 4096, TensorDType::Float32);
+    let orig_84096_quant = orig_84096_1.quantize();
     let mut result_84096 = Tensor::zeros(8, 4096, TensorDType::Float32);
 
     let orig_84096_1_f16 = Tensor::zeros(8, 4096, TensorDType::Float16);
@@ -110,6 +111,29 @@ pub fn tensor_benchmarks(c: &mut Criterion) {
     let m2 = Tensor::random(1, 128, TensorDType::Float32);
     let m1_f16 = m1.to_f16();
     let m2_f16 = m2.to_f16();
+
+    let quant = m1.quantize();
+
+    c.bench_function(
+        "1024x128 * 1x128 matrix vector transposed multiplication, k4 quantized * f32",
+        |b| {
+            b.iter(|| {
+                let _ = quant.matrix_vector_mul_transposed(black_box(&m2));
+            })
+        },
+    );
+
+    c.bench_function(
+        "matrix multiplication 8x4096 @ 4096x4096 k8 quantized * f32 in-place, transposed",
+        |b| {
+            b.iter(|| {
+                let _ = result_84096.matrix_mul_inplace_transposed(
+                    black_box(&orig_84096_quant),
+                    black_box(&orig_84096_2),
+                );
+            })
+        },
+    );
 
     c.bench_function(
         "1024x128 * 1x128 matrix vector transposed multiplication, f32",

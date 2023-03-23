@@ -457,6 +457,9 @@ impl FeedForward {
             FromPiecesDirection::Rows,
         )?;
 
+        w1 = crate::weight_compression::quantize(&w1);
+        panic!("stop");
+
         if data_settings.force_f16 {
             w1 = w1.to_f16();
             w2 = w2.to_f16();
