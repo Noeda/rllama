@@ -33,7 +33,7 @@ pub struct Transformer {
 }
 
 // Clone is cheap
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DataSettings {
     #[cfg(feature = "opencl")]
     use_opencl_for_feedforward: bool,
@@ -43,6 +43,7 @@ pub struct DataSettings {
     cl: Option<OpenCL>,
 
     force_f16: bool,
+    force_k4: bool,
 }
 
 // OpenCL is safe to send to threads but Rust doesn't know that
@@ -56,6 +57,7 @@ impl DataSettings {
             use_opencl_for_feedforward: false,
             use_opencl_for_attention: false,
             force_f16: false,
+            force_k4: false,
             cl: cl.clone(),
         }
     }
@@ -63,7 +65,10 @@ impl DataSettings {
     #[allow(clippy::new_without_default)]
     #[cfg(not(feature = "opencl"))]
     pub fn new() -> Self {
-        DataSettings { force_f16: false }
+        DataSettings {
+            force_f16: false,
+            force_k4: false,
+        }
     }
 
     #[cfg(feature = "opencl")]
@@ -78,6 +83,17 @@ impl DataSettings {
 
     pub fn force_f16(mut self) -> DataSettings {
         self.force_f16 = true;
+        if self.force_k4 {
+            panic!("Cannot force both f16 and k4");
+        }
+        self
+    }
+
+    pub fn force_k4(mut self) -> DataSettings {
+        self.force_k4 = true;
+        if self.force_f16 {
+            panic!("Cannot force both f16 and k4");
+        }
         self
     }
 }
@@ -457,13 +473,14 @@ impl FeedForward {
             FromPiecesDirection::Rows,
         )?;
 
-        w1 = crate::weight_compression::quantize(&w1);
-        panic!("stop");
-
         if data_settings.force_f16 {
             w1 = w1.to_f16();
             w2 = w2.to_f16();
             w3 = w3.to_f16();
+        } else if data_settings.force_k4 {
+            w1 = w1.quantize();
+            w2 = w2.quantize();
+            w3 = w3.quantize();
         }
 
         #[cfg(feature = "opencl")]
@@ -491,7 +508,7 @@ impl FeedForward {
     pub fn forward(&self, x: &mut Tensor) -> Tensor {
         let original_x_dtype = x.dtype();
         if x.dtype() != self.w1.dtype() {
-            *x = x.to_same_type(&self.w1);
+            *x = x.to_compatible_matrix_mul_type(&self.w1);
         }
         #[cfg(feature = "opencl")]
         let x_was_on_cpu: bool;
@@ -516,7 +533,7 @@ impl FeedForward {
         let w1_out = w1_out.silu();
         let mut w1w3_out = w1_out.hadamard_product(&w3_out).transpose();
         if w1w3_out.dtype() != self.w2.dtype() {
-            w1w3_out = w1w3_out.to_same_type(&self.w2);
+            w1w3_out = w1w3_out.to_compatible_matrix_mul_type(&self.w2);
         }
         #[cfg(not(feature = "opencl"))]
         {
@@ -578,6 +595,11 @@ impl Attention {
             wk = wk.to_f16();
             wv = wv.to_f16();
             wo = wo.to_f16();
+        } else if data_settings.force_k4 {
+            wq = wq.quantize();
+            wk = wk.quantize();
+            wv = wv.quantize();
+            wo = wo.quantize();
         }
 
         #[cfg(feature = "opencl")]
@@ -616,7 +638,7 @@ impl Attention {
     ) -> Tensor {
         let original_x_dtype = x.dtype();
         if x.dtype() != self.wq.dtype() {
-            *x = x.to_same_type(&self.wq);
+            *x = x.to_compatible_matrix_mul_type2(&self.wq);
         }
 
         #[cfg(feature = "opencl")]
@@ -744,7 +766,7 @@ impl Attention {
                 {
                     let xq_row = Tensor::concat(&concat_vec2).view(1, self.wo.rows());
                     xq_row
-                        .into_same_type(&self.wo)
+                        .to_compatible_matrix_mul_type2(&self.wo)
                         .matrix_mul_transposed(&self.wo)
                 }
                 #[cfg(feature = "opencl")]

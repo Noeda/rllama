@@ -53,6 +53,9 @@ struct Cli {
     #[arg(long, action)]
     f16: bool,
 
+    #[arg(long, action)]
+    k4: bool,
+
     #[cfg(feature = "opencl")]
     #[arg(long)]
     opencl_device: Option<usize>,
@@ -232,6 +235,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli.f16 {
         data_settings = data_settings.force_f16();
+    }
+    if cli.k4 {
+        data_settings = data_settings.force_k4();
     }
 
     pln!("Loading transformer weights from {}...", model_path);

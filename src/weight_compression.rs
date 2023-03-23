@@ -9,7 +9,7 @@ pub fn quantize(tensor: &Tensor) -> Tensor {
      * This is a simplistic rounding quantizer. It splits each row in a tensor to 16 buckets and
      * takes the average value in said buckets as the quantized weight.
      */
-    let mut result = Tensor::zeros(tensor.rows(), tensor.cols(), tensor.dtype());
+    let mut allowed_values_by_row: Vec<Vec<f32>> = Vec::with_capacity(tensor.rows() as usize);
     for row in 0..tensor.rows() {
         let mut values: Vec<f32> = Vec::with_capacity(tensor.cols() as usize);
         values.truncate(0);
@@ -43,8 +43,15 @@ pub fn quantize(tensor: &Tensor) -> Tensor {
         allowed_values[0] = mi;
         allowed_values[15] = ma;
         allowed_values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        allowed_values_by_row.push(allowed_values);
+    }
 
-        for col in 0..tensor.cols() {
+    //let mut result = Tensor::zeros(tensor.rows(), tensor.cols(), tensor.dtype());
+    let result = Tensor::make_k4bit_from_fn(
+        tensor.rows(),
+        tensor.cols(),
+        |row, col| {
+            let allowed_values: &[f32] = &allowed_values_by_row[row as usize];
             let val = tensor.get_f32(row, col);
             let mut best = 0;
             let mut best_dist = std::f32::MAX;
@@ -55,8 +62,16 @@ pub fn quantize(tensor: &Tensor) -> Tensor {
                     best_dist = dist;
                 }
             }
-            result.set_f32(row, col, allowed_values[best] as f32);
-        }
-    }
+            best as u8
+        },
+        |row: i64| -> [f32; 16] {
+            let allowed_values: &[f32] = &allowed_values_by_row[row as usize];
+            let mut result: [f32; 16] = [0.0; 16];
+            for i in 0..16 {
+                result[i] = allowed_values[i];
+            }
+            result
+        },
+    );
     result
 }
