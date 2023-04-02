@@ -92,6 +92,19 @@ rllama --tokenizer-model /path/to/tokenizer.model \
 
 Use `rllama --help` to see all the options.
 
+## Interactive mode
+
+There is a simple interactive mode to do back-and-forth discussion with the model.
+
+```shell
+rllama ... --start-interactive
+```
+
+In this mode, you need to type your prompt before the AI starts doing its work.
+If the AI outputs token sequence `[EOF]` (you can set it with
+`--interactive-stop` switch) then you can type a new prompt that will be
+appended to the sequence.
+
 ## Inference server
 
 `rllama` can run in an inference server mode with a simple HTTP JSON API. You

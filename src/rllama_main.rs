@@ -162,12 +162,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params: ModelParams = serde_json::from_slice(&bs)?;
     pln!("Loaded model parameters from {}.", param_path);
 
-    let prompt: String = match (&cli.prompt, &cli.prompt_file) {
-        (Some(ref prompt), None) => {
+    let prompt: String = match (&cli.prompt, &cli.prompt_file, start_interactive) {
+        (Some(ref prompt), None, _) => {
             pln!("Using prompt: {}", prompt);
             prompt.clone()
         }
-        (None, Some(ref prompt_file)) => {
+        (None, Some(ref prompt_file), _) => {
             pln!("Using prompt file: {}", prompt_file);
             let mut fs = std::fs::File::open(prompt_file)?;
             let mut bs = Vec::new();
@@ -175,13 +175,18 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::mem::drop(fs);
             String::from_utf8(bs)?
         }
-        _ => {
+        (_, _, false) => {
             if cli.inference_server {
                 "".to_string()
             } else {
                 eprintln!("Please provide either a prompt or a prompt file.");
                 return Err("Please provide either a prompt or a prompt file.".into());
             }
+        }
+        (None, None, true) => "".to_string(),
+        (_, _, true) => {
+            eprintln!("Please provide either a prompt or a prompt file.");
+            return Err("Please provide either a prompt or a prompt file.".into());
         }
     };
 
@@ -749,10 +754,13 @@ fn command_line_inference(
         "{}",
         "  This is the color of the generated text".truecolor(128, 255, 128)
     );
-    pln!("stop keywords are {}", interactive_stop.as_str());
+    pln!(
+        "Interactive mode stop token sequence: {}",
+        interactive_stop.as_str()
+    );
     pln!("---");
     print!("{}", prompt.as_str().truecolor(128, 128, 255));
-    
+
     let _ = std::io::stdout().flush();
 
     let mut first_token_time: std::time::Duration = std::time::Duration::new(0, 0);
@@ -765,28 +773,27 @@ fn command_line_inference(
     while toks_id.len() < max_seq_len {
         let now = std::time::Instant::now();
         let preds = tr.forward(&toks_id[prev_pos..], prev_pos, &mut caches);
-
         if interactive {
             let mut newinput = String::new();
             std::io::stdin().read_line(&mut newinput)?;
-            let _ = newinput.pop();
-            //removing new line from input
-            user_token = tok.tokenize_to_ids(newinput);
-            
-            //removing [1, ... , end of token]
+            // removing new line from input
+            if newinput.ends_with('\n') {
+                let _ = newinput.pop();
+            }
+            user_token = tok.tokenize_to_ids(newinput.clone());
+            println!("#{:?}# #{}#", user_token, newinput);
+
+            // removing [start token] as it is already in the prompt, and tokenize_to_ids  adds it.
             let _ = user_token.remove(0);
-            let _ = user_token.pop();
-            //toks_id.append(&mut user_token);
             interactive = false;
         }
         let (mut highest_pred_idx, mut token_prob);
-        
+
         if user_token.len() > 0 {
             highest_pred_idx = user_token.remove(0);
             token_prob = 0.0;
-        }
-        else {
-            (highest_pred_idx, token_prob) = token_sampler.sample(&preds, &tok, &toks_id);   
+        } else {
+            (highest_pred_idx, token_prob) = token_sampler.sample(&preds, &tok, &toks_id);
         }
         toks_id.push(highest_pred_idx as TokenId);
 
@@ -821,11 +828,16 @@ fn command_line_inference(
                     tok_print.truecolor(128 + redness / 2, 255 - redness / 2, 128)
                 );
             };
-            if !first && tok_id == stop_tokens.last().unwrap() 
-                && tok_idx+prev_pos > stop_tokens.len() 
-                && toks_id[prev_pos+1+tok_idx-(stop_tokens.len()-1) .. prev_pos+1+tok_idx+1] == stop_tokens
+            if !first
+                && tok_id == stop_tokens.last().unwrap()
+                && tok_idx + prev_pos > stop_tokens.len()
+                && toks_id
+                    [prev_pos + 1 + tok_idx - (stop_tokens.len() - 1)..prev_pos + 1 + tok_idx + 1]
+                    == stop_tokens
             {
+                if start_interactive {
                     interactive = true;
+                }
             }
         }
         if first {
@@ -839,9 +851,6 @@ fn command_line_inference(
         if stop_seen {
             break;
         }
-        
-
-
     }
     println!();
     if stop_seen && !be_quiet {
@@ -854,16 +863,14 @@ fn command_line_inference(
             first_token_time.as_millis()
         );
         if times_per_token.len() > 0 {
-            println!(            
-                    "Time taken per token (excluding first token): {:?}ms",
-                    times_per_token.iter().map(|t| t.as_millis()).sum::<u128>()
-                        / times_per_token.len() as u128
+            println!(
+                "Time taken per token (excluding first token): {:?}ms",
+                times_per_token.iter().map(|t| t.as_millis()).sum::<u128>()
+                    / times_per_token.len() as u128
             );
+        } else {
+            println!("No token generated");
         }
-        else {
-               println!(  "No token generated");
-        }
-        
     }
     Ok(())
 }
