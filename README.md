@@ -106,7 +106,7 @@ rllama ... --start-interactive \
 In this mode, you need to type your prompt before the AI starts doing its work.
 If the AI outputs token sequence given in `--interactive-stop` (defaults to
 `[EOF]`) then it will ask for another input. You probably want to have `"Human:
-"` or something similar, like this:
+"` or something similar, see example below.
 
 `--interactive-prompt-postfix` is appended automatically to your answers. You
 can use this to force the AI to follow a pattern. Here is a full example of
