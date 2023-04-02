@@ -754,6 +754,12 @@ fn command_line_inference(
         "Repetition penalty: {}",
         token_sampler.get_repetition_penalty()
     );
+    if start_interactive {
+        pln!(
+            "  Interactive mode stop token sequence: {}",
+            interactive_stop.as_str()
+        );
+    }
     pln!("---");
     pln!(
         "{}",
@@ -762,10 +768,6 @@ fn command_line_inference(
     pln!(
         "{}",
         "  This is the color of the generated text".truecolor(128, 255, 128)
-    );
-    pln!(
-        "Interactive mode stop token sequence: {}",
-        interactive_stop.as_str()
     );
     pln!("---");
     print!("{}", prompt.as_str().truecolor(128, 128, 255));
