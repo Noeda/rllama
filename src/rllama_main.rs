@@ -781,7 +781,6 @@ fn command_line_inference(
                 let _ = newinput.pop();
             }
             user_token = tok.tokenize_to_ids(newinput.clone());
-            println!("#{:?}# #{}#", user_token, newinput);
 
             // removing [start token] as it is already in the prompt, and tokenize_to_ids  adds it.
             let _ = user_token.remove(0);
