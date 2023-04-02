@@ -17,6 +17,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+// Refer to README.md to see what all these options mean.
 #[derive(Parser, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -37,6 +38,8 @@ struct Cli {
 
     #[arg(long)]
     interactive_stop: Option<String>,
+    #[arg(long)]
+    interactive_prompt_postfix: Option<String>,
     #[arg(long, action)]
     start_interactive: bool,
 
@@ -100,6 +103,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokenizer_path = cli.tokenizer_path.clone();
     let param_path = cli.param_path.clone();
     let interactive_stop = cli.interactive_stop.clone().unwrap_or("[EOF]".to_string());
+    let interactive_prompt_postfix = cli
+        .interactive_prompt_postfix
+        .clone()
+        .unwrap_or("".to_string());
     let start_interactive = cli.start_interactive;
     #[cfg(not(feature = "server"))]
     if cli.inference_server {
@@ -280,6 +287,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             tok.clone(),
             prompt.clone(),
             interactive_stop.clone(),
+            interactive_prompt_postfix.clone(),
             start_interactive,
             be_quiet,
             max_seq_len,
@@ -690,6 +698,7 @@ fn command_line_inference(
     tok: Arc<Tokenizer>,
     prompt: String,
     interactive_stop: String,
+    interactive_prompt_postfix: String,
     start_interactive: bool,
     be_quiet: bool,
     max_seq_len: usize,
@@ -780,6 +789,7 @@ fn command_line_inference(
             if newinput.ends_with('\n') {
                 let _ = newinput.pop();
             }
+            newinput += &interactive_prompt_postfix;
             user_token = tok.tokenize_to_ids(newinput.clone());
 
             // removing [start token] as it is already in the prompt, and tokenize_to_ids  adds it.
