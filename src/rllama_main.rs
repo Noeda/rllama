@@ -1,4 +1,6 @@
+use crate::data_source::DataSource;
 use crate::embedding::Embedding;
+use crate::model_params::ModelParams;
 use crate::semaphore::Semaphore;
 #[cfg(feature = "opencl")]
 use crate::tensor_opencl_support::OpenCL;
@@ -87,16 +89,6 @@ struct Cli {
     inference_server_exit_after_one_query: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct ModelParams {
-    dim: usize,
-    multiple_of: usize,
-    n_heads: usize,
-    n_layers: usize,
-    norm_eps: f64,
-    vocab_size: i64,
-}
-
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let model_path = cli.model_path.clone();
@@ -166,8 +158,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bs = Vec::new();
     fs.read_to_end(&mut bs)?;
     std::mem::drop(fs);
-    let params: ModelParams = serde_json::from_slice(&bs)?;
-    pln!("Loaded model parameters from {}.", param_path);
 
     let prompt: String = match (&cli.prompt, &cli.prompt_file, start_interactive) {
         (Some(ref prompt), None, _) => {
@@ -201,36 +191,13 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tok = Tokenizer::load(tokenizer_path.as_str())?;
     pln!("Tokenizer loaded. Loading model from {}...", model_path);
 
-    let mut unpickle_results: Vec<Value> = vec![];
+    let model_data_source = DataSource::from_inferred_source(model_path.clone())?;
 
-    let mut part: usize = 0;
-    loop {
-        let model_path: PathBuf = model_path.clone().into();
-        let base_path = model_path.join(format!("consolidated.{:02}", part));
-        // The data file is in consolidated.XX/data.pkl where XX is the part number.
-        let full_path = base_path.join("data.pkl");
-        let mut fs = match std::fs::File::open(&full_path) {
-            Ok(fs) => fs,
-            Err(err) => {
-                if err.kind() == std::io::ErrorKind::NotFound {
-                    break;
-                } else {
-                    return Err(err.into());
-                }
-            }
-        };
-        let mut bs = Vec::new();
-        fs.read_to_end(&mut bs)?;
-        std::mem::drop(fs);
-        pln!("Read data.pkl from path {}", full_path.display());
-
-        let result = unpickler::unpickle(&bs)?;
-        unpickle_results.push(result);
-        part += 1;
-    }
+    let params: ModelParams = serde_json::from_slice(&bs)?;
+    pln!("Loaded model parameters from {}.", param_path);
 
     pln!("Loading embeddings from {}...", model_path);
-    let emb = Embedding::from_unpickled(&unpickle_results, model_path.clone())?;
+    let emb = Embedding::from_unpickled(model_data_source.clone())?;
 
     let max_seq_len = cli.max_seq_len.unwrap_or(1024);
 
@@ -254,7 +221,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     pln!("Loading transformer weights from {}...", model_path);
     let tr = Transformer::from_unpickled(
-        &unpickle_results,
         emb,
         params.dim,
         params.n_layers,
@@ -262,7 +228,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_seq_len,
         params.norm_eps,
         data_settings,
-        model_path,
+        model_data_source,
     )?;
     pln!("All is loaded. Starting inference.");
 
@@ -738,7 +704,6 @@ fn command_line_inference(
     stop_tokens.remove(0);
     pln!("---");
     pln!(" dim: {}", params.dim);
-    pln!(" multiple_of: {}", params.multiple_of);
     pln!(" n_heads: {}", params.n_heads);
     pln!(" n_layers: {}", params.n_layers);
     pln!(" norm_eps: {}", params.norm_eps);

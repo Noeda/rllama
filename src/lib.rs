@@ -1,7 +1,10 @@
 #![feature(stdsimd)]
 #![feature(decl_macro)]
 
+pub mod data_source;
 pub mod embedding;
+pub mod huggingface_loader;
+pub mod model_params;
 pub mod protomodels;
 pub mod rllama_main;
 pub mod semaphore;

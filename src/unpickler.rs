@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub struct Unpickler {}
@@ -49,6 +49,64 @@ impl Value {
         self.get(&Value::String(key.as_ref().to_string()))
     }
 
+    // Same as get_str_key but tries two keys, returning the first one that is found.
+    pub fn get_str_key2<S: AsRef<str>, S2: AsRef<str>>(
+        &self,
+        key: S,
+        key2: S2,
+    ) -> Option<(String, &Value)> {
+        let key = key.as_ref();
+        let key2 = key2.as_ref();
+        match self.get_str_key(key) {
+            Some(v) => Some((key.to_string(), v)),
+            None => match self.get_str_key(key2) {
+                Some(v) => Some((key2.to_string(), v)),
+                None => None,
+            },
+        }
+    }
+
+    // Returns all keys as a set of strings, if the value is a dictionary. Otherwise returns empty set.
+    pub fn keys(&self) -> BTreeSet<String> {
+        match self {
+            Value::Dict(d) => {
+                let mut result = BTreeSet::new();
+                for (k, _v) in d.iter() {
+                    match k {
+                        Value::String(s) => {
+                            result.insert(s.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                result
+            }
+            _ => BTreeSet::new(),
+        }
+    }
+
+    // Merges value dictionaries together
+    //
+    // Panics if there are duplicate keys.
+    pub fn merge_dicts(dicts: &[Self]) -> Self {
+        if dicts.is_empty() {
+            return Value::Dict(BTreeMap::new());
+        }
+        let mut result = dicts[0].clone();
+        for dict in dicts.iter().skip(1) {
+            match (result, dict) {
+                (Value::Dict(mut d1), Value::Dict(d2)) => {
+                    for (k, v) in d2 {
+                        d1.insert(k.clone(), v.clone());
+                    }
+                    result = Value::Dict(d1);
+                }
+                _ => panic!("Can only merge dictionaries"),
+            }
+        }
+        result
+    }
+
     pub fn get_global(&self) -> Option<(&str, &str)> {
         match self {
             Value::Global(module_name, attribute_name) => Some((module_name, attribute_name)),
@@ -86,13 +144,13 @@ impl Value {
 
     // Assume that the value represents a tensor in PyTorch and return instructions how to actually
     // load the values.
-    pub fn to_tensor_builder(&self) -> Option<TensorBuilder> {
+    pub fn to_tensor_builder(&self, tensor_name: String) -> Option<TensorBuilder> {
         match self {
             Value::Reduce(call, args) => match **call {
                 Value::Global(ref module_name, ref attribute_name) => {
                     if module_name == "torch._utils" && attribute_name == "_rebuild_tensor_v2" {
                         match **args {
-                            Value::Tuple(ref args) => self.to_tensor_builder2(args),
+                            Value::Tuple(ref args) => self.to_tensor_builder2(tensor_name, args),
                             _ => None,
                         }
                     } else {
@@ -105,15 +163,15 @@ impl Value {
         }
     }
 
-    fn to_tensor_builder2(&self, args: &[Value]) -> Option<TensorBuilder> {
+    fn to_tensor_builder2(&self, tensor_name: String, args: &[Value]) -> Option<TensorBuilder> {
         if args.len() == 6 {
-            Self::to_tensor_builder2_6items(args)
+            Self::to_tensor_builder2_6items(tensor_name, args)
         } else {
             None
         }
     }
 
-    fn to_tensor_builder2_6items(args: &[Value]) -> Option<TensorBuilder> {
+    fn to_tensor_builder2_6items(tensor_name: String, args: &[Value]) -> Option<TensorBuilder> {
         let storagev: &Value = args[0].get_persistent_id()?;
         let storage_args: &[Value] = storagev.get_tuple()?;
         let storage_mark: &str = storage_args[0].get_str()?;
@@ -128,7 +186,6 @@ impl Value {
         let dtype: TensorDType = match storage_type {
             "HalfStorage" => TensorDType::Float16,
             _ => {
-                println!("1");
                 return None;
             }
         };
@@ -141,11 +198,9 @@ impl Value {
         let stride: &[Value] = args[3].get_tuple()?;
 
         if shape.len() != 2 && shape.len() != 1 {
-            println!("2");
             return None;
         }
         if stride.len() != 2 && stride.len() != 1 {
-            println!("3");
             return None;
         }
 
@@ -159,7 +214,6 @@ impl Value {
         let (row_stride, col_stride) = if stride.len() == 1 {
             let (r, c) = (stride[0].get_int64()?, 1);
             if r != 1 {
-                println!("4");
                 return None;
             }
             (r, c)
@@ -168,16 +222,15 @@ impl Value {
         };
 
         if col_stride != 1 {
-            println!("5");
             return None;
         }
         if row_stride != cols && stride.len() == 2 {
-            println!("6");
             return None;
         }
 
         Some(TensorBuilder {
             src_path: PathBuf::from(storage_filename),
+            tensor_name,
             dtype,
             stride: row_stride,
             rows,
