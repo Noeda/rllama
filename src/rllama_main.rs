@@ -72,6 +72,10 @@ struct Cli {
     #[arg(long)]
     opencl_device: Option<usize>,
 
+    #[cfg(feature = "opencl")]
+    #[arg(long)]
+    percentage_to_gpu: Option<f32>,
+
     #[arg(long, action)]
     inference_server: bool,
 
@@ -121,6 +125,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_threads
         }
     };
+
+    #[cfg(feature = "opencl")]
+    let percentage_to_gpu: f32 = cli.percentage_to_gpu.unwrap_or(1.0);
 
     let mut be_quiet: bool = false;
     if !colored::control::SHOULD_COLORIZE.should_colorize() {
@@ -211,7 +218,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             if let Some(opencl) = opencl {
                 let ds = DataSettings::new(Some(opencl));
-                ds.use_opencl()
+                ds.percentage_to_gpu(percentage_to_gpu).use_opencl()
             } else {
                 DataSettings::new(None)
             }

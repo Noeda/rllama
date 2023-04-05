@@ -37,6 +37,8 @@ pub struct Transformer {
 #[derive(Clone)]
 pub struct DataSettings {
     #[cfg(feature = "opencl")]
+    percentage_to_gpu: f32,
+    #[cfg(feature = "opencl")]
     use_opencl_for_feedforward: bool,
     #[cfg(feature = "opencl")]
     use_opencl_for_attention: bool,
@@ -57,6 +59,7 @@ impl DataSettings {
             use_opencl_for_feedforward: false,
             use_opencl_for_attention: false,
             force_f16: false,
+            percentage_to_gpu: 1.0,
             cl: cl.clone(),
         }
     }
@@ -74,6 +77,28 @@ impl DataSettings {
         }
         self.use_opencl_for_feedforward = true;
         self.use_opencl_for_attention = true;
+        self
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn dont_use_opencl(mut self) -> DataSettings {
+        self.use_opencl_for_feedforward = false;
+        self.use_opencl_for_attention = false;
+        self
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn percentage_to_gpu(mut self, percentage: f32) -> DataSettings {
+        self.percentage_to_gpu = percentage;
+        if self.percentage_to_gpu >= 1.0 {
+            self.percentage_to_gpu = 1.0;
+        }
+        if self.percentage_to_gpu < 0.0 {
+            self.percentage_to_gpu = 0.0;
+        }
+        if self.percentage_to_gpu.is_nan() {
+            self.percentage_to_gpu = 0.0;
+        }
         self
     }
 
@@ -234,13 +259,32 @@ impl Transformer {
         let layers: Vec<TransformerBlock> = (0..n_layers)
             .into_par_iter()
             .map(|layer_id| {
+                let data_settings = {
+                    #[cfg(feature = "opencl")]
+                    {
+                        let max_layers = n_layers;
+                        let last_layer_on_gpu = (data_settings.percentage_to_gpu
+                            * (max_layers - 1) as f32)
+                            .round() as usize;
+                        if layer_id > last_layer_on_gpu {
+                            data_settings.clone().dont_use_opencl()
+                        } else {
+                            data_settings.clone()
+                        }
+                    }
+                    #[cfg(not(feature = "opencl"))]
+                    {
+                        data_settings.clone()
+                    }
+                };
+
                 let result = TransformerBlock::from_unpickled(
                     layer_id,
                     eps,
                     n_local_heads,
                     head_dim,
                     dim,
-                    data_settings.clone(),
+                    data_settings,
                     data_source.clone(),
                 );
                 progress_bar.inc(1);

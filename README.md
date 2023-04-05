@@ -8,6 +8,7 @@ RLLaMA is a pure Rust implementation of [LLaMA large language model inference.](
   * LLaMA-7B, LLaMA-13B, LLaMA-30B, LLaMA-65B all confirmed working
   * Hand-optimized AVX2 implementation
   * OpenCL support for GPU inference.
+  * Load model only partially to GPU with `--percentage-to-gpu` command line switch to run hybrid-GPU-CPU inference.
   * Simple HTTP API support, with the possibility of doing token sampling on
     client side
   * It can load `Vicuna-13B` instruct-finetuned model (although currently there is no nice UX).
@@ -92,6 +93,19 @@ rllama --tokenizer-path /path/to/tokenizer.model \
 ```
 
 Use `rllama --help` to see all the options.
+
+## Partially load model to GPU
+
+`rllama` can load only some of the transformer blocks to GPU. There is a
+command line argument:
+
+`--percentage-to-gpu <value between 0 and 1, defaults to 1>`
+
+1 means 100% and 0 means 0%. Values in-between load the model partially to GPU.
+
+You can use this to load LLaMA-13B or Vicuna-13B on a consumer GPU of 24
+gigabytes at around `--percentage-to-gpu 0.9` before it fails to out-of-memory
+error (if there are no competing programs on the computer that use GPU memory).
 
 ## Interactive mode
 
