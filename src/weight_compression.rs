@@ -1,8 +1,5 @@
 use crate::tensor::Tensor;
-use rand::{thread_rng, Rng};
-use rayon::prelude::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use rand::thread_rng;
 
 pub fn quantize(tensor: &Tensor) -> Tensor {
     /*
@@ -31,7 +28,7 @@ pub fn quantize(tensor: &Tensor) -> Tensor {
         }
         values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let mut allowed_values: Vec<f32> = Vec::with_capacity(16);
-        let mut rng = thread_rng();
+        let _rng = thread_rng();
         for i in 0..16 {
             let start_idx = i * values.len() / 16;
             let end_idx = (i + 1) * values.len() / 16;

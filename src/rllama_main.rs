@@ -1,23 +1,28 @@
 use crate::data_source::DataSource;
 use crate::embedding::Embedding;
 use crate::model_params::ModelParams;
-use crate::semaphore::Semaphore;
+
 #[cfg(feature = "opencl")]
 use crate::tensor_opencl_support::OpenCL;
 use crate::token_sampler::TokenSampler;
 use crate::tokenizer::{TokenId, Tokenizer};
-use crate::transformer::{DataSettings, Transformer, TransformerCaches};
-use crate::unpickler;
-use crate::unpickler::Value;
+use crate::transformer::{DataSettings, Transformer};
+
+#[cfg(feature = "server")]
+use crate::semaphore::Semaphore;
+#[cfg(feature = "server")]
+use crate::transformer::TransformerCaches;
 use clap::Parser;
 use colored::Colorize;
 #[cfg(feature = "server")]
 use rocket::{response::status, response::Stream, Data, State};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(feature = "server")]
+use std::sync::RwLock;
 
 // Refer to README.md to see what all these options mean.
 #[derive(Parser, Clone)]
@@ -334,6 +339,7 @@ fn server_inference(
     panic!("Starting web server failed.");
 }
 
+#[cfg(feature = "server")]
 fn is_false(b: &bool) -> bool {
     !b
 }
@@ -763,7 +769,7 @@ fn command_line_inference(
             let _ = user_token.remove(0);
             interactive = false;
         }
-        let (mut highest_pred_idx, mut token_prob);
+        let (highest_pred_idx, token_prob);
 
         if user_token.len() > 0 {
             highest_pred_idx = user_token.remove(0);

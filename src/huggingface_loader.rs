@@ -21,6 +21,7 @@ pub enum HugginfaceModelError {
     UnpicklingError(#[from] unpickler::UnpicklingError),
 }
 
+#[allow(dead_code)]
 pub struct HugginfaceModel {
     pub(crate) unpickles: Vec<(unpickler::Value, PathBuf)>,
     // (path, files, tensors)
@@ -66,7 +67,7 @@ impl HugginfaceModel {
         // Read config,json
         let config_json_path: PathBuf = path.join("config.json");
         let config_json = std::fs::read_to_string(config_json_path)?;
-        let config: HugginfaceConfig = serde_json::from_str(&config_json)?;
+        let _config: HugginfaceConfig = serde_json::from_str(&config_json)?;
 
         let index_json_path: PathBuf = path.join("pytorch_model.bin.index.json");
         let index_json = std::fs::read_to_string(index_json_path)?;

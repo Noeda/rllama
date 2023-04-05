@@ -5,7 +5,7 @@ use crate::unpickler::Value;
 use ouroboros::self_referencing;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -58,12 +58,12 @@ impl Read for ZipFileSeekWrap {
 impl Seek for ZipFileSeekWrap {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         self.with_mut(|mut s| {
-            let mut reader = &mut s.reader;
+            let reader = &mut s.reader;
             match pos {
-                std::io::SeekFrom::Start(pos) => {
+                std::io::SeekFrom::Start(_pos) => {
                     unimplemented!();
                 }
-                std::io::SeekFrom::End(pos) => {
+                std::io::SeekFrom::End(_pos) => {
                     unimplemented!();
                 }
                 std::io::SeekFrom::Current(pos) => {
@@ -103,7 +103,7 @@ impl DataSource {
         let name: &Path = name.as_ref();
         match self {
             DataSource::LLaMASource(path, _) => {
-                let mut base = PathBuf::from(format!("consolidated.{:02}", shard));
+                let base = PathBuf::from(format!("consolidated.{:02}", shard));
                 let path = path.join(base).join(name);
                 let reader = std::fs::File::open(path)?;
                 Ok(DataSourceFile {
@@ -127,7 +127,7 @@ impl DataSource {
                         let archive_len = archive.len();
                         let mut idx: usize = archive_len;
                         for i in 0..archive_len {
-                            let mut file = archive.by_index(i)?;
+                            let file = archive.by_index(i)?;
                             let file = huggingface_loader::remove_first_directory(file.name());
                             if file == name {
                                 idx = i;
@@ -146,7 +146,7 @@ impl DataSource {
                                     zipfile: zipfile_name.clone(),
                                     name: name.to_str().unwrap().to_string(),
                                     archive,
-                                    reader_builder: move |mut archive| {
+                                    reader_builder: move |archive| {
                                         archive.by_index(idx).unwrap()
                                     },
                                 }

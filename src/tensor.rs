@@ -21,7 +21,7 @@ use crate::data_source::DataSource;
 use crate::simd_support::*;
 #[cfg(feature = "opencl")]
 use crate::tensor_opencl_support::{OpenCL, OpenCLError, OpenCLEvent, OpenCLTensor};
-use crate::unpickler;
+
 use crate::unpickler::UnpicklingError;
 use half::f16;
 use lazy_static::lazy_static;
@@ -29,7 +29,7 @@ use rand::Rng;
 use rayon::prelude::*;
 use std::alloc::Layout;
 use std::io::{Read, Seek};
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 #[cfg(feature = "opencl")]
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
@@ -879,7 +879,7 @@ impl Tensor {
 
         fn offset_to_cursors(
             offset: usize,
-            d1: usize,
+            _d1: usize,
             d2: usize,
             d3: usize,
             d4: usize,
@@ -2388,7 +2388,7 @@ impl TensorBuilder {
         data_source: DataSource,
         direction: FromPiecesDirection,
     ) -> Result<Tensor, TensorError> {
-        let name = name.as_ref();
+        let _name = name.as_ref();
         if builders.is_empty() {
             return Err(TensorError::TensorBuilderEmpty);
         }
