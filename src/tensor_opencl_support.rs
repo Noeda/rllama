@@ -15,6 +15,8 @@ use thiserror::Error;
 struct Programs {
     matrix_mul_transposed_f16_program: Program,
     matrix_mul_transposed_f16: Kernel,
+    matrix_mul_transposed_one_row_f16_program: Program,
+    matrix_mul_transposed_one_row_f16: Kernel,
     matrix_mul_transposed_f16_cpu_optimized_program: Program,
     matrix_mul_transposed_f16_cpu_optimized: Kernel,
     silu_f16_program: Program,
@@ -324,12 +326,23 @@ impl OpenCLTensor {
         // 2 = GPU optimized vector multiply (other.rows == 1)
         const CPU: u8 = 0;
         const GPU: u8 = 1;
-        let strategy: u8 = if self.cl.is_cpu_device { CPU } else { GPU };
+        const GPU2: u8 = 2;
+        let strategy: u8 = if self.cl.is_cpu_device {
+            CPU
+        } else {
+            if src.rows == 1 {
+                GPU2
+            } else {
+                GPU
+            }
+        };
 
         let prg = if strategy == CPU {
             &prg.matrix_mul_transposed_f16_cpu_optimized
-        } else {
+        } else if strategy == GPU {
             &prg.matrix_mul_transposed_f16
+        } else {
+            &prg.matrix_mul_transposed_one_row_f16
         };
         prg.set_arg(0, self.buf.clone())?;
         prg.set_arg(1, src.buf.clone())?;
@@ -367,6 +380,14 @@ impl OpenCLTensor {
                     .queue(&self.queue)
                     .global_work_size([cols16 as usize, rows16 as usize])
                     .local_work_size([16, 16])
+                    .enew(&mut event);
+                b.enq()?;
+            } else if strategy == GPU2 {
+                let b = prg
+                    .cmd()
+                    .queue(&self.queue)
+                    .global_work_size([cols16 as usize, 1])
+                    .local_work_size([16, 1])
                     .enew(&mut event);
                 b.enq()?;
             } else {
@@ -428,6 +449,22 @@ fn make_programs(ctx: &Context, queue: &Queue) -> Result<Programs, OpenCLError> 
         .arg(&0)
         .queue(queue.clone())
         .build()?;
+    let matrix_mul_transposed_one_row_f16_program =
+        make_program_with_src(ctx, MATRIX_MUL_TRANSPOSED_F16_ONE_ROW_SRC)?;
+    let matrix_mul_transposed_one_row_f16 = Kernel::builder()
+        .program(&matrix_mul_transposed_one_row_f16_program)
+        .name("matrix_mul_transposed_one_row_f16")
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(None::<&Buffer<u16>>)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .arg(&0)
+        .queue(queue.clone())
+        .build()?;
     let silu_f16_program = make_program_with_src(ctx, SILU_F16_SRC)?;
     let silu_f16 = Kernel::builder()
         .program(&silu_f16_program)
@@ -459,6 +496,8 @@ fn make_programs(ctx: &Context, queue: &Queue) -> Result<Programs, OpenCLError> 
     Ok(Programs {
         matrix_mul_transposed_f16_program,
         matrix_mul_transposed_f16,
+        matrix_mul_transposed_one_row_f16_program,
+        matrix_mul_transposed_one_row_f16,
         matrix_mul_transposed_f16_cpu_optimized_program,
         matrix_mul_transposed_f16_cpu_optimized,
         silu_f16_program,
@@ -516,6 +555,65 @@ __kernel void matrix_mul_transposed_f16(
     }
 }
 "#;
+
+const MATRIX_MUL_TRANSPOSED_F16_ONE_ROW_SRC: &str = r#"
+__kernel void matrix_mul_transposed_one_row_f16(
+    __global half *tgt,
+    __global const half *left,
+    __global const half *right,
+    const int left_cols_capacity,
+    const int right_cols_capacity,
+    const int ncols_capacity,
+    const int nrows,
+    const int ncols,  // size of target
+    const int shared_sz
+) {
+    // assertions:
+    // nrows == 1
+    // left_rows == 1
+    __local float lefttile[16];
+    __local float righttile[16][16];
+
+    const int global_x = get_global_id(0);
+    const int local_x = get_local_id(0);
+    const int num_tiles = (shared_sz + 15) / 16;
+    const int x_tile = (global_x / 16) * 16;
+
+    float sum = 0.0f;
+    if (x_tile + 15 < ncols) {
+        for (int t = 0; t < num_tiles; ++t) {
+            lefttile[local_x] = vload_half(t * 16 + local_x, left);
+            for (int k = 0; k < 16; ++k) {
+                righttile[k][local_x] = vload_half(t * 16 + local_x + (x_tile + k) * right_cols_capacity, right);
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+            for (int k = 0; k < 16; ++k) {
+                sum += lefttile[k] * righttile[local_x][k];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+    } else {
+        for (int t = 0; t < num_tiles; ++t) {
+            lefttile[local_x] = vload_half(t * 16 + local_x, left);
+            for (int k = 0; k < 16; ++k) {
+                if (x_tile + k >= ncols) {
+                    righttile[k][local_x] = 0.0f;
+                } else {
+                    righttile[k][local_x] = vload_half(t * 16 + local_x + (x_tile + k) * right_cols_capacity, right);
+                }
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+            for (int k = 0; k < 16; ++k) {
+                sum += lefttile[k] * righttile[local_x][k];
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+    }
+
+    if (global_x < ncols) {
+        vstore_half(sum, global_x, (__global half*) tgt);
+    }
+}"#;
 
 const MATRIX_MUL_TRANSPOSED_F16_CPU_OPTIMIZED_SRC: &str = r#"
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable

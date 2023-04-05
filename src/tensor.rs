@@ -29,7 +29,7 @@ use rand::Rng;
 use rayon::prelude::*;
 use std::alloc::Layout;
 use std::io::{Read, Seek};
-use std::path::{PathBuf};
+use std::path::PathBuf;
 #[cfg(feature = "opencl")]
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
@@ -3116,9 +3116,56 @@ mod tests {
 
     #[cfg(feature = "opencl")]
     #[test]
-    fn gpu_matrix_mul_vector_transposed_is_close_to_cpu_matrix_mul_vector_transposed() {
+    fn gpu_matrix_mul_vector_transposed_is_close_to_cpu_matrix_mul_vector_transposed_1() {
         let cl = OpenCL::new(false, 0).unwrap();
         let mut rng = rand::thread_rng();
+
+        // src.rows == 1
+
+        for _trial in 0..300 {
+            let a = rng.gen_range(1..=300);
+            let b = rng.gen_range(1..=300);
+
+            let mat1 = Tensor::random(1, a, TensorDType::Float16);
+            let mat2 = Tensor::random(b, a, TensorDType::Float16);
+            let mat3 = Tensor::random(1, b, TensorDType::Float16);
+            let mut mat1_gpu = mat1.clone();
+            let mut mat2_gpu = mat2.clone();
+            let mut mat3_gpu = mat3.clone();
+            mat1_gpu.to_gpu_inplace(&cl).unwrap();
+            mat2_gpu.to_gpu_inplace(&cl).unwrap();
+            mat3_gpu.to_gpu_inplace(&cl).unwrap();
+
+            let mat1 = mat1.to_f32();
+            let mat2 = mat2.to_f32();
+            let mut mat3 = mat3.to_f32();
+
+            mat3.matrix_mul_inplace_transposed(&mat1, &mat2);
+            mat3_gpu.matrix_mul_inplace_transposed(&mat1_gpu, &mat2_gpu);
+            mat3_gpu.to_cpu_inplace().unwrap();
+
+            assert_eq!(mat3.rows(), mat3_gpu.rows());
+            assert_eq!(mat3.cols(), mat3_gpu.cols());
+
+            for row in 0..mat3.rows {
+                for col in 0..mat3.cols {
+                    assert_relative_eq!(
+                        mat3.get_f32(row, col),
+                        mat3_gpu.get_f32(row, col),
+                        epsilon = 1e-2,
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
+    fn gpu_matrix_mul_vector_transposed_is_close_to_cpu_matrix_mul_vector_transposed_2() {
+        let cl = OpenCL::new(false, 0).unwrap();
+        let mut rng = rand::thread_rng();
+
+        // other.rows == 1
 
         for _trial in 0..300 {
             let a = rng.gen_range(1..=300);

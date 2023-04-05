@@ -27,9 +27,22 @@ pub fn opencl_benchmarks(c: &mut Criterion) {
     let mut mul_left1 = Tensor::random(4096, 11000, TensorDType::Float16);
     let mut mul_right1 = Tensor::random(1, 11000, TensorDType::Float16);
     let mut mul_target1 = Tensor::zeros(4096, 1, TensorDType::Float16);
+    let mut mul_target2 = Tensor::zeros(1, 4096, TensorDType::Float16);
     mul_left1.to_gpu_inplace(&cl).unwrap();
     mul_right1.to_gpu_inplace(&cl).unwrap();
     mul_target1.to_gpu_inplace(&cl).unwrap();
+    mul_target2.to_gpu_inplace(&cl).unwrap();
+
+    c.bench_function(
+        "1x11000 to 4096x11000 matrix multiplication transposed on OpenCL",
+        |b| {
+            b.iter(|| {
+                mul_target2
+                    .matrix_mul_inplace_transposed(black_box(&mul_right1), black_box(&mul_left1));
+                mul_target2.finish();
+            })
+        },
+    );
 
     c.bench_function(
         "4096x11000 to 1x11000 matrix multiplication transposed on OpenCL",
