@@ -258,21 +258,11 @@ Weights are always cast to 16-bit floats for OpenCL.
 
 This is a hobby thing for me so don't expect updates or help.
 
-* Some other CPU implementations use quantization to reduce the size of weights
-  and generally speed up everything a lot. `rllama` does not have this.
+* There are various BLAS libraries like CLBlast to speed up matrix
+  multiplication that probably outperform my handwritten code.
 * I've heard there is some thing called Tensor Cores on nVidia GPUs. Not
   accessible with OpenCL. But might be accessible on Vulkan with a an
-  extension.
-* More sophisticated token sampling. I saw on Hackernews some comments how the
-  samplers included in Facebook's reference code are kinda garbage and you can
-  get much better results with good defaults and things like repetition
-  penalty.
-* There is an initial start-up time as the program has to pass through the
-  initial prompt. I don't know if this start-up time can be eliminated
-  completely but it could be cached on disk. Use cases like having a standard
-  prompt to prime the text generation that you reuse many times.
-* Stanford released some instruct-finetuned LLaMA-7B, once I find the weights
-  then I'd like to try make a chat-like command-line interface.
+  extension. Or with cuBLAS.
 
 ## Benchmarks
 
