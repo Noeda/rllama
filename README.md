@@ -10,6 +10,7 @@ RLLaMA is a pure Rust implementation of [LLaMA large language model inference.](
   * OpenCL support for GPU inference.
   * Simple HTTP API support, with the possibility of doing token sampling on
     client side
+  * It can load `Vicuna-13B` instruct-finetuned model (although currently there is no nice UX).
 
 ## Performance
 
