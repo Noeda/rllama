@@ -127,7 +127,7 @@ The defaults match Vicuna-13B model:
 
 ```
   --interactive-system-prompt    "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
-  --interactive-prompt-postfix   " Assissant:"
+  --interactive-prompt-postfix   " ###Assissant:"
   --interactive-prompt-prefix    " "
   --interactive-stop             "###Human:"
 ```
