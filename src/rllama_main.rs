@@ -165,6 +165,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    #[cfg(feature = "opencl")]
+    let has_opencl = opencl.is_some();
+
     // Read ModelParams from param_path, we expect it to be JSON
     let mut fs = std::fs::File::open(&param_path)?;
     let mut bs = Vec::new();
@@ -227,7 +230,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         DataSettings::new()
     };
 
-    if cli.f16 || opencl.is_some() {
+    #[cfg(feature = "opencl")]
+    if cli.f16 || has_opencl {
+        data_settings = data_settings.force_f16();
+    }
+    #[cfg(not(feature = "opencl"))]
+    if cli.f16 {
         data_settings = data_settings.force_f16();
     }
 
