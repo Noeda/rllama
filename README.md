@@ -114,29 +114,39 @@ back-and-forth discussion with the model.
 
 ```shell
 rllama ... --start-interactive \
-           --interactive-prompt-postfix " AI:" \  # (optional)
-           --interactive-stop "Human: "           # (optional but you probably want to set it)
+           --interactive-system-prompt "Helpful assistant helps curious human." \   # (optional)
+           --interactive-prompt-postfix  " ###Assistant:" \  # (optional)
+           --interactive-stop "###Human: "                   # (optional)
 ```
 
 In this mode, you need to type your prompt before the AI starts doing its work.
 If the AI outputs token sequence given in `--interactive-stop` (defaults to
-`[EOF]`) then it will ask for another input. You probably want to have `"Human:
-"` or something similar, see example below.
+`###Human:`) then it will ask for another input.
 
-`--interactive-prompt-postfix` is appended automatically to your answers. You
-can use this to force the AI to follow a pattern. Here is a full example of
-interactive mode command line:
+The defaults match Vicuna-13B model:
+
+```
+  --interactive-system-prompt    "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+  --interactive-prompt-postfix   " Assissant:"
+  --interactive-prompt-prefix    " "
+  --interactive-stop             "###Human:"
+```
+
+`--interactive-prompt-postfix` is appended automatically to your typed text and
+`--interactive-prompt-prefix` is appended to the start of your typed text.Here
+is an example of interactive mode command line with the default settings:
 
 ```shell
 rllama --f16 \
-       --param-path /LLaMA/7B/params.json \
-       --model-path /LLaMA/7B \
+       --param-path /models/vicuna13b/params.json \
+       --model-path /models/vicuna13b \
        --tokenizer-path /stonks/LLaMA/tokenizer.model \
-       --prompt "This is an interactive session between human and AI assistant. AI: Hi! How can I help you? Human:" \
-       --start-interactive \
-       --interactive-stop "Human:" \
-       --interactive-prompt-postfix " AI:"
+       --start-interactive
 ```
+
+As of writing of this, the output is not formatted prettily for chat and there
+is no visual indication of when you are supposed to be typing. That will come
+later.
 
 ## Inference server
 

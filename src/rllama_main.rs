@@ -44,9 +44,13 @@ struct Cli {
     prompt_file: Option<String>,
 
     #[arg(long)]
-    interactive_stop: Option<String>,
+    interactive_system_prompt: Option<String>,
+    #[arg(long)]
+    interactive_stop: Vec<String>,
     #[arg(long)]
     interactive_prompt_postfix: Option<String>,
+    #[arg(long)]
+    interactive_prompt_prefix: Option<String>,
     #[arg(long, action)]
     start_interactive: bool,
 
@@ -103,11 +107,37 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_path = cli.model_path.clone();
     let tokenizer_path = cli.tokenizer_path.clone();
     let param_path = cli.param_path.clone();
-    let interactive_stop = cli.interactive_stop.clone().unwrap_or("[EOF]".to_string());
+    let interactive_system_prompt = cli.interactive_system_prompt.clone().unwrap_or("A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, terse answers to the human's questions.### Human:".to_string());
+    let mut interactive_stop = cli.interactive_stop.clone();
+    if interactive_stop.is_empty() {
+        // Desperado to catch all weird variants of ###Human the model might spit out.
+        interactive_stop = vec![
+            "### Human:".to_string(),
+            "###Human:".to_string(),
+            "### Human: ".to_string(),
+            "###Human: ".to_string(),
+            " ### Human:".to_string(),
+            " ###Human:".to_string(),
+            " ### Human: ".to_string(),
+            " ###Human: ".to_string(),
+            "\n### Human:".to_string(),
+            "\n###Human:".to_string(),
+            "\n### Human: ".to_string(),
+            "\n###Human: ".to_string(),
+            "\n ### Human:".to_string(),
+            "\n ###Human:".to_string(),
+            "\n ### Human: ".to_string(),
+            "\n ###Human: ".to_string(),
+        ];
+    }
+    let interactive_prompt_prefix = cli
+        .interactive_prompt_prefix
+        .clone()
+        .unwrap_or(" ".to_string());
     let interactive_prompt_postfix = cli
         .interactive_prompt_postfix
         .clone()
-        .unwrap_or("".to_string());
+        .unwrap_or("### Assistant:".to_string());
     let start_interactive = cli.start_interactive;
     #[cfg(not(feature = "server"))]
     if cli.inference_server {
@@ -273,6 +303,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             tok.clone(),
             prompt.clone(),
             interactive_stop.clone(),
+            interactive_system_prompt.clone(),
+            interactive_prompt_prefix.clone(),
             interactive_prompt_postfix.clone(),
             start_interactive,
             be_quiet,
@@ -684,7 +716,9 @@ fn command_line_inference(
     tr: Arc<Transformer>,
     tok: Arc<Tokenizer>,
     prompt: String,
-    interactive_stop: String,
+    interactive_stop: Vec<String>,
+    interactive_system_prompt: String,
+    interactive_prompt_prefix: String,
     interactive_prompt_postfix: String,
     start_interactive: bool,
     be_quiet: bool,
@@ -701,7 +735,18 @@ fn command_line_inference(
         };
     }
 
+    let mut prompt = prompt;
+
+    if start_interactive && !prompt.is_empty() {
+        return Err(
+            "Cannot start interactive mode with a prompt. Use --interactive-system-prompt instead."
+                .into(),
+        );
+    }
+    prompt = interactive_system_prompt.clone();
+
     let mut toks_id: Vec<TokenId> = tok.tokenize_to_ids(prompt.clone());
+    let mut toks_str: String = prompt.clone();
     let mut prev_pos = 0;
     let mut token_sampler = TokenSampler::new()
         .temperature(1.0)
@@ -721,8 +766,6 @@ fn command_line_inference(
     if let Some(repetition_penalty) = cli.repetition_penalty {
         token_sampler = token_sampler.repetition_penalty(repetition_penalty);
     }
-    let mut stop_tokens = tok.tokenize_to_ids(interactive_stop.clone());
-    stop_tokens.remove(0);
     pln!("---");
     pln!(" dim: {}", params.dim);
     pln!(" n_heads: {}", params.n_heads);
@@ -742,9 +785,15 @@ fn command_line_inference(
     );
     if start_interactive {
         pln!(
-            "  Interactive mode stop token sequence: {}",
-            interactive_stop.as_str()
+            "  Interactive mode stop token sequences: {:?}",
+            interactive_stop
         );
+        pln!("---");
+        pln!("System prompt:");
+        pln!("  {}", interactive_system_prompt);
+        pln!("---");
+        pln!("Interactive prompt prefix: {}", interactive_prompt_prefix);
+        pln!("Interactive prompt postfix: {}", interactive_prompt_postfix);
     }
     pln!("---");
     pln!(
@@ -777,6 +826,7 @@ fn command_line_inference(
             if newinput.ends_with('\n') {
                 let _ = newinput.pop();
             }
+            newinput = interactive_prompt_prefix.clone() + &newinput;
             newinput += &interactive_prompt_postfix;
             user_token = tok.tokenize_to_ids(newinput.clone());
 
@@ -809,6 +859,7 @@ fn command_line_inference(
             } else {
                 tok_print += tok_str.replace('▁', " ").as_str();
             }
+            toks_str += tok_print.as_str();
             if first && tok_idx < toks_id.len() - 2 {
                 // intentionally left empty, already print
             } else {
@@ -825,15 +876,12 @@ fn command_line_inference(
                     tok_print.truecolor(128 + redness / 2, 255 - redness / 2, 128)
                 );
             };
-            if !first
-                && tok_id == stop_tokens.last().unwrap()
-                && tok_idx + prev_pos > stop_tokens.len()
-                && toks_id
-                    [prev_pos + 1 + tok_idx - (stop_tokens.len() - 1)..prev_pos + 1 + tok_idx + 1]
-                    == stop_tokens
-            {
-                if start_interactive {
-                    interactive = true;
+            for stop_str in interactive_stop.iter() {
+                if !first && toks_str.ends_with(stop_str.as_str()) {
+                    if start_interactive {
+                        interactive = true;
+                    }
+                    break;
                 }
             }
         }
