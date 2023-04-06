@@ -29,9 +29,9 @@ LLaMA-65B: AMD Ryzen 5950X:                       4186ms / token    f16    (pure
 
 OpenCL (all use f16):
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  247ms / token            (OpenCL on GPU)
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  216ms / token            (OpenCL on GPU)
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  680ms / token            (OpenCL on CPU)
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <I ran out of GPU memory :(>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  420ms / token            (OpenCL on GPU)
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token           (OpenCL on CPU)
 LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token           (OpenCL on CPU)
 ```
@@ -321,4 +321,11 @@ LLaMA-13B: AMD Ryzen 3950X: 1029ms / token    f16
 LLaMA-13B: AMD Ryzen 3950X: 1930ms / token    f32
 LLaMA-30B: AMD Ryzen 5950X: 2112ms / token    f16
 LLaMA-65B: AMD Ryzen 5950X: 4186ms / token    f16
+
+# commit f5328ab5bd62fe9bd930539382b13e9033434a0b (5 April 2023)
+# I've worked on making Vicuna-13B runnable and added an option to only
+# partially use GPU. Improved one of the OpenCL kernels:
+
+LLaMA-7B:   AMD Ryzen 3950X + OpenCL GTX 3090 Ti:    420ms (at 90%/10% GPU/CPU split)
+LLaMA-13B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:    216ms (at 100% GPU)
 ```
