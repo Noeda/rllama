@@ -227,7 +227,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         DataSettings::new()
     };
 
-    if cli.f16 {
+    if cli.f16 || opencl.is_some() {
         data_settings = data_settings.force_f16();
     }
 

@@ -1265,7 +1265,10 @@ impl Tensor {
             );
         }
         if src.dtype != other.dtype {
-            panic!("Invalid matrix multiplication, different dtypes");
+            panic!(
+                "Invalid matrix multiplication, different dtypes: {:?} vs {:?}",
+                src.dtype, other.dtype
+            );
         }
         if self.rows != src.rows {
             panic!("Invalid matrix multiplication, different number of rows");
