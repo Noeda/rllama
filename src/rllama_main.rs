@@ -743,7 +743,9 @@ fn command_line_inference(
                 .into(),
         );
     }
-    prompt = interactive_system_prompt.clone();
+    if start_interactive {
+        prompt = interactive_system_prompt.clone();
+    }
 
     let mut toks_id: Vec<TokenId> = tok.tokenize_to_ids(prompt.clone());
     let mut toks_str: String = prompt.clone();
