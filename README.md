@@ -54,6 +54,27 @@ RUSTFLAGS="-C target-feature=+sse2,+avx,+fma,+avx2" cargo install rllama
 There is a `.cargo/config.toml` inside this repository that will enable these
 features if you install manually from this Git repository instead.
 
+## Install (Docker path)
+
+There is a Dockerfile you can use if you'd rather just get started quickly and
+you are familiar with `docker`. You still need to download the models yourself.
+
+```
+docker build -f ./.docker/cpu.dockerfile -t rllama .
+```
+
+```
+docker run -v /models/LLaMA:/models:z -it rllama \
+    rllama --model-path /models/7B \
+           --param-path /models/7B/params.json \
+           --tokenizer-path /models/tokenizer.model \
+           --prompt "hi I like cheese"
+```
+
+Replace `/models/LLaMA` with the directory you've downloaded your models to.
+The `:z` in `-v` flag may or may not be needed depending on your distribution
+(I needed it on Fedora Linux)
+
 ## LLaMA weights
 
 Refer to https://github.com/facebookresearch/llama/ As of now, you need to be
