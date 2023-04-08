@@ -29,9 +29,9 @@ LLaMA-65B: AMD Ryzen 5950X:                       4186ms / token    f16    (pure
 
 OpenCL (all use f16):
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  216ms / token            (OpenCL on GPU)
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  216ms / token            (OpenCL on GPU)
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  680ms / token            (OpenCL on CPU)
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  420ms / token            (OpenCL on GPU)
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  420ms / token            (OpenCL on GPU)
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token           (OpenCL on CPU)
 LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token           (OpenCL on CPU)
 ```
@@ -316,26 +316,26 @@ LLaMA-13B: AMD Ryzen 3950X: 2005ms / token
 # commit 63d27dba9091823f8ba11a270ab5790d6f597311  (13 March 2023)
 # This one has one part of the transformer moved to GPU as a type of smoke test
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  567ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  567ms / token
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  956ms / token
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  987ms / token
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  987ms / token
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1706ms / token
 
 # commit 35b0c372a87192761e17beb421699ea5ad4ac1ce  (13 March 2023)
 # I moved some attention stuff to OpenCL too.
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  283ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  283ms / token
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  679ms / token
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <ran out of GPU memory>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  <ran out of GPU memory>
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1226ms / token
 
 # commit de5dd592777b3a4f5a9e8c93c8aeef25b9294364  (15 March 2023)
 # The matrix multiplication on GPU is now much faster. It didn't have that much
 # effect overall though, but I got modest improvement on LLaMA-7B GPU.
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  247ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  247ms / token
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  680ms / token
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <ran out of GPU memory>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  <ran out of GPU memory>
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token
 LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token
 
@@ -357,6 +357,6 @@ LLaMA-65B: AMD Ryzen 5950X: 4186ms / token    f16
 # I've worked on making Vicuna-13B runnable and added an option to only
 # partially use GPU. Improved one of the OpenCL kernels:
 
-LLaMA-7B:   AMD Ryzen 3950X + OpenCL GTX 3090 Ti:    420ms (at 90%/10% GPU/CPU split)
-LLaMA-13B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:    216ms (at 100% GPU)
+LLaMA-7B:   AMD Ryzen 3950X + OpenCL RTX 3090 Ti:    420ms (at 90%/10% GPU/CPU split)
+LLaMA-13B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:    216ms (at 100% GPU)
 ```
