@@ -59,6 +59,8 @@ features if you install manually from this Git repository instead.
 There is a Dockerfile you can use if you'd rather just get started quickly and
 you are familiar with `docker`. You still need to download the models yourself.
 
+
+### For CPU-only docker support:
 ```
 docker build -f ./.docker/cpu.dockerfile -t rllama .
 ```
@@ -74,6 +76,9 @@ docker run -v /models/LLaMA:/models:z -it rllama \
 Replace `/models/LLaMA` with the directory you've downloaded your models to.
 The `:z` in `-v` flag may or may not be needed depending on your distribution
 (I needed it on Fedora Linux)
+
+### For GPU-enabled docker support with nvidia:
+Follow the instructions [here](.docker/nvidia.md).
 
 ## LLaMA weights
 
