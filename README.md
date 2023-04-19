@@ -83,7 +83,7 @@ You should now be ready to generate some text.
 Run LLaMA-7B with some weights casted to 16-bit floats:
 
 ```shell
-rllama --tokenizer-model /path/to/tokenizer.model \
+rllama --tokenizer-path /path/to/tokenizer.model \
        --model-path /path/to/LLaMA/7B \
        --param-path /path/to/LLaMA/7B/params.json \
        --f16 \
@@ -91,6 +91,37 @@ rllama --tokenizer-model /path/to/tokenizer.model \
 ```
 
 Use `rllama --help` to see all the options.
+
+## Interactive mode
+
+There is a simple experimental interactive mode to try force a type of
+back-and-forth discussion with the model.
+
+```shell
+rllama ... --start-interactive \
+           --interactive-prompt-postfix " AI:" \  # (optional)
+           --interactive-stop "Human: "           # (optional but you probably want to set it)
+```
+
+In this mode, you need to type your prompt before the AI starts doing its work.
+If the AI outputs token sequence given in `--interactive-stop` (defaults to
+`[EOF]`) then it will ask for another input. You probably want to have `"Human:
+"` or something similar, see example below.
+
+`--interactive-prompt-postfix` is appended automatically to your answers. You
+can use this to force the AI to follow a pattern. Here is a full example of
+interactive mode command line:
+
+```shell
+rllama --f16 \
+       --param-path /LLaMA/7B/params.json \
+       --model-path /LLaMA/7B \
+       --tokenizer-path /stonks/LLaMA/tokenizer.model \
+       --prompt "This is an interactive session between human and AI assistant. AI: Hi! How can I help you? Human:" \
+       --start-interactive \
+       --interactive-stop "Human:" \
+       --interactive-prompt-postfix " AI:"
+```
 
 ## Inference server
 
@@ -194,7 +225,7 @@ RUSTFLAGS="-C target-feature=+sse2,+avx,+fma,+avx2" cargo install rllama --featu
 ```
 
 ```
-rllama --tokenizer-model /path/to/tokenizer.model \
+rllama --tokenizer-path /path/to/tokenizer.model \
        --model-path /path/to/LLaMA/7B \
        --param-path /path/to/LLaMA/7B/params.json \
        --opencl-device 0 \

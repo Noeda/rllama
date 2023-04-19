@@ -17,6 +17,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+// Refer to README.md to see what all these options mean.
 #[derive(Parser, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -37,6 +38,8 @@ struct Cli {
 
     #[arg(long)]
     interactive_stop: Option<String>,
+    #[arg(long)]
+    interactive_prompt_postfix: Option<String>,
     #[arg(long, action)]
     start_interactive: bool,
 
@@ -100,6 +103,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokenizer_path = cli.tokenizer_path.clone();
     let param_path = cli.param_path.clone();
     let interactive_stop = cli.interactive_stop.clone().unwrap_or("[EOF]".to_string());
+    let interactive_prompt_postfix = cli
+        .interactive_prompt_postfix
+        .clone()
+        .unwrap_or("".to_string());
     let start_interactive = cli.start_interactive;
     #[cfg(not(feature = "server"))]
     if cli.inference_server {
@@ -162,12 +169,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params: ModelParams = serde_json::from_slice(&bs)?;
     pln!("Loaded model parameters from {}.", param_path);
 
-    let prompt: String = match (&cli.prompt, &cli.prompt_file) {
-        (Some(ref prompt), None) => {
+    let prompt: String = match (&cli.prompt, &cli.prompt_file, start_interactive) {
+        (Some(ref prompt), None, _) => {
             pln!("Using prompt: {}", prompt);
             prompt.clone()
         }
-        (None, Some(ref prompt_file)) => {
+        (None, Some(ref prompt_file), _) => {
             pln!("Using prompt file: {}", prompt_file);
             let mut fs = std::fs::File::open(prompt_file)?;
             let mut bs = Vec::new();
@@ -175,13 +182,18 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::mem::drop(fs);
             String::from_utf8(bs)?
         }
-        _ => {
+        (_, _, false) => {
             if cli.inference_server {
                 "".to_string()
             } else {
                 eprintln!("Please provide either a prompt or a prompt file.");
                 return Err("Please provide either a prompt or a prompt file.".into());
             }
+        }
+        (None, None, true) => "".to_string(),
+        (_, _, true) => {
+            eprintln!("Please provide either a prompt or a prompt file.");
+            return Err("Please provide either a prompt or a prompt file.".into());
         }
     };
 
@@ -275,6 +287,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             tok.clone(),
             prompt.clone(),
             interactive_stop.clone(),
+            interactive_prompt_postfix.clone(),
             start_interactive,
             be_quiet,
             max_seq_len,
@@ -685,6 +698,7 @@ fn command_line_inference(
     tok: Arc<Tokenizer>,
     prompt: String,
     interactive_stop: String,
+    interactive_prompt_postfix: String,
     start_interactive: bool,
     be_quiet: bool,
     max_seq_len: usize,
@@ -739,6 +753,12 @@ fn command_line_inference(
         "Repetition penalty: {}",
         token_sampler.get_repetition_penalty()
     );
+    if start_interactive {
+        pln!(
+            "  Interactive mode stop token sequence: {}",
+            interactive_stop.as_str()
+        );
+    }
     pln!("---");
     pln!(
         "{}",
@@ -748,11 +768,9 @@ fn command_line_inference(
         "{}",
         "  This is the color of the generated text".truecolor(128, 255, 128)
     );
-    pln!("stop keywords are {}", interactive_stop.as_str());
-    pln!("stop code are {:?}", stop_tokens);
     pln!("---");
     print!("{}", prompt.as_str().truecolor(128, 128, 255));
-    
+
     let _ = std::io::stdout().flush();
 
     let mut first_token_time: std::time::Duration = std::time::Duration::new(0, 0);
@@ -765,7 +783,6 @@ fn command_line_inference(
     while toks_id.len() < max_seq_len {
         let now = std::time::Instant::now();
         let preds = tr.forward(&toks_id[prev_pos..], prev_pos, &mut caches);
-
         if interactive {
             let mut newinput = String::new();
             std::io::stdin().read_line(&mut newinput)?;
@@ -776,19 +793,18 @@ fn command_line_inference(
                     newinput.pop();
                 }
             }
-            
-            user_token = tok.more_tokenize_to_ids(newinput);
+            newinput += &interactive_prompt_postfix;
+            user_token = tok.more_tokenize_to_ids(newinput.clone());
             
             interactive = false;
         }
         let (mut highest_pred_idx, mut token_prob);
-        
+
         if user_token.len() > 0 {
             highest_pred_idx = user_token.remove(0);
             token_prob = 0.0;
-        }
-        else {
-            (highest_pred_idx, token_prob) = token_sampler.sample(&preds, &tok, &toks_id);   
+        } else {
+            (highest_pred_idx, token_prob) = token_sampler.sample(&preds, &tok, &toks_id);
         }
         toks_id.push(highest_pred_idx as TokenId);
 
@@ -823,11 +839,16 @@ fn command_line_inference(
                     tok_print.truecolor(128 + redness / 2, 255 - redness / 2, 128)
                 );
             };
-            if !first && tok_id == stop_tokens.last().unwrap() 
-                && tok_idx+prev_pos > stop_tokens.len() 
-                && toks_id[prev_pos+1+tok_idx-(stop_tokens.len()-1) .. prev_pos+1+tok_idx+1] == stop_tokens
+            if !first
+                && tok_id == stop_tokens.last().unwrap()
+                && tok_idx + prev_pos > stop_tokens.len()
+                && toks_id
+                    [prev_pos + 1 + tok_idx - (stop_tokens.len() - 1)..prev_pos + 1 + tok_idx + 1]
+                    == stop_tokens
             {
+                if start_interactive {
                     interactive = true;
+                }
             }
         }
         if first {
@@ -841,9 +862,6 @@ fn command_line_inference(
         if stop_seen {
             break;
         }
-        
-
-
     }
     println!();
     if stop_seen && !be_quiet {
@@ -856,16 +874,14 @@ fn command_line_inference(
             first_token_time.as_millis()
         );
         if times_per_token.len() > 0 {
-            println!(            
-                    "Time taken per token (excluding first token): {:?}ms",
-                    times_per_token.iter().map(|t| t.as_millis()).sum::<u128>()
-                        / times_per_token.len() as u128
+            println!(
+                "Time taken per token (excluding first token): {:?}ms",
+                times_per_token.iter().map(|t| t.as_millis()).sum::<u128>()
+                    / times_per_token.len() as u128
             );
+        } else {
+            println!("No token generated");
         }
-        else {
-               println!(  "No token generated");
-        }
-        
     }
     Ok(())
 }
