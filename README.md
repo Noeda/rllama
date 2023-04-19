@@ -105,11 +105,14 @@ rllama ... --start-interactive \
 
 In this mode, you need to type your prompt before the AI starts doing its work.
 If the AI outputs token sequence given in `--interactive-stop` (defaults to
-`[EOF]`) then it will ask for another input. You probably want to have `"Human:
+`</s>`) then it will ask for another input. You probably want to have `"Human:
 "` or something similar, see example below.
 
 `--interactive-prompt-postfix` is appended automatically to your answers. You
-can use this to force the AI to follow a pattern. Here is a full example of
+can use this to force the AI to follow a pattern.
+`--hide-interactions` is here to hide the words already type (works well with multi-lining.
+
+Here is a full example of
 interactive mode command line:
 
 ```shell
@@ -122,7 +125,22 @@ rllama --f16 \
        --interactive-stop "Human:" \
        --interactive-prompt-postfix " AI:"
 ```
-
+a multi-line version is also possible 
+```shell
+rllama --f16 \
+       --param-path /LLaMA/7B/params.json \
+       --model-path /LLaMA/7B \
+       --tokenizer-path /stonks/LLaMA/tokenizer.model \
+       --prompt "This is an interactive session between human and AI assistant.
+AI: Hi! How can I help you?
+Human:" \
+       --start-interactive \
+       --hide-interactions \
+       --interactive-stop "
+Human:" \
+       --interactive-prompt-postfix "
+AI:"
+```
 ## Inference server
 
 `rllama` can run in an inference server mode with a simple HTTP JSON API. You
