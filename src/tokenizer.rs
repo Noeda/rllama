@@ -175,4 +175,26 @@ impl Tokenizer {
         }
         result
     }
+    pub fn more_tokenize_to_ids<S: AsRef<str>>(&self, s: S) -> Vec<TokenId> {
+        let mut ls: String;
+        // Don't start with _\n (maybe extend to all whitespace char ?)
+        if format!("{}", s.as_ref()).starts_with('\n') {
+            ls = format!("{}", s.as_ref());
+        }
+        else
+        {
+            ls = format!("▁{}", s.as_ref());
+        }
+        
+        // Replace all space characters with a special token.
+        ls = ls.replace(' ', "▁");
+
+        let pieces = self.tokenize_to_pieces(ls);
+        let mut result = Vec::new();
+        for piece in pieces {
+            let piece_info = self.pieces.get(piece).unwrap();
+            result.push(piece_info.idx as i32);
+        }
+        result
+    }
 }

@@ -720,8 +720,7 @@ fn command_line_inference(
     if let Some(repetition_penalty) = cli.repetition_penalty {
         token_sampler = token_sampler.repetition_penalty(repetition_penalty);
     }
-    let mut stop_tokens = tok.tokenize_to_ids(interactive_stop.clone());
-    stop_tokens.remove(0);
+    let mut stop_tokens = tok.more_tokenize_to_ids(interactive_stop.clone());
     pln!("---");
     pln!(" dim: {}", params.dim);
     pln!(" multiple_of: {}", params.multiple_of);
@@ -750,6 +749,7 @@ fn command_line_inference(
         "  This is the color of the generated text".truecolor(128, 255, 128)
     );
     pln!("stop keywords are {}", interactive_stop.as_str());
+    pln!("stop code are {:?}", stop_tokens);
     pln!("---");
     print!("{}", prompt.as_str().truecolor(128, 128, 255));
     
@@ -769,14 +769,16 @@ fn command_line_inference(
         if interactive {
             let mut newinput = String::new();
             std::io::stdin().read_line(&mut newinput)?;
-            let _ = newinput.pop();
             //removing new line from input
-            user_token = tok.tokenize_to_ids(newinput);
+            if newinput.ends_with('\n') {
+                newinput.pop();
+                if newinput.ends_with('\r') {
+                    newinput.pop();
+                }
+            }
             
-            //removing [1, ... , end of token]
-            let _ = user_token.remove(0);
-            let _ = user_token.pop();
-            //toks_id.append(&mut user_token);
+            user_token = tok.more_tokenize_to_ids(newinput);
+            
             interactive = false;
         }
         let (mut highest_pred_idx, mut token_prob);
