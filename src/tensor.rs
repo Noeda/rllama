@@ -17,10 +17,11 @@
  *   If it's "XXX_inplace", then it has a &mut self and it modifies the tensor in place.
  */
 
+use crate::data_source::DataSource;
 use crate::simd_support::*;
 #[cfg(feature = "opencl")]
 use crate::tensor_opencl_support::{OpenCL, OpenCLError, OpenCLEvent, OpenCLTensor};
-use crate::unpickler;
+
 use crate::unpickler::UnpicklingError;
 use half::f16;
 use lazy_static::lazy_static;
@@ -28,7 +29,7 @@ use rand::Rng;
 use rayon::prelude::*;
 use std::alloc::Layout;
 use std::io::{Read, Seek};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 #[cfg(feature = "opencl")]
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
@@ -36,6 +37,7 @@ use thiserror::Error;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TensorBuilder {
     pub(crate) src_path: PathBuf,
+    pub(crate) tensor_name: String,
     pub(crate) dtype: TensorDType,
     pub(crate) stride: i64,
     pub(crate) rows: i64,
@@ -249,12 +251,12 @@ impl Tensor {
         self.dtype
     }
 
-    pub fn from_unpickled<P: AsRef<Path>, S: AsRef<str>>(
+    /*
+    pub fn from_unpickled<S: AsRef<str>>(
         unpickled: &unpickler::Value,
         name: S,
-        data_dir: P,
+        data_source: DataSource,
     ) -> Result<Tensor, UnpicklingError> {
-        let data_dir: &Path = data_dir.as_ref();
         let name: &str = name.as_ref();
         let val = unpickled
             .get_str_key(name)
@@ -262,29 +264,67 @@ impl Tensor {
         let val = val
             .to_tensor_builder()
             .ok_or(UnpicklingError::InvalidTensorData)?;
-        let val = val.load(data_dir)?;
+        let val = val.load(data_source)?;
         Ok(val)
     }
+    */
 
-    pub fn from_unpickled_pieces<P: AsRef<Path>, S: AsRef<str>>(
-        unpickled: &[unpickler::Value],
+    pub fn from_unpickled_pieces<S: AsRef<str>>(
         name: S,
-        data_dir: P,
+        data_source: DataSource,
         direction: FromPiecesDirection,
     ) -> Result<Tensor, UnpicklingError> {
-        let data_dir: &Path = data_dir.as_ref();
         let name: &str = name.as_ref();
         let mut builders = Vec::new();
+        let unpickled = data_source.unpickled();
         for unpickle in unpickled.iter() {
             let val = unpickle
                 .get_str_key(name)
                 .ok_or(UnpicklingError::MissingField(name.to_string()))?;
             let val = val
-                .to_tensor_builder()
+                .to_tensor_builder(name.to_string())
                 .ok_or(UnpicklingError::InvalidTensorData)?;
             builders.push(val);
         }
-        let val = TensorBuilder::load_from_pieces(&builders, data_dir, direction)?;
+        let val = TensorBuilder::load_from_pieces(&builders, name, data_source, direction)?;
+        Ok(val)
+    }
+
+    // same as from_unpickled_pieces but tries two different names
+    pub fn from_unpickled_pieces2<S: AsRef<str>, S2: AsRef<str>>(
+        name: S,
+        name2: S2,
+        data_source: DataSource,
+        direction: FromPiecesDirection,
+    ) -> Result<Tensor, UnpicklingError> {
+        match Tensor::from_unpickled_pieces(name, data_source.clone(), direction.clone()) {
+            Ok(val) => Ok(val),
+            Err(_) => Tensor::from_unpickled_pieces(name2, data_source, direction),
+        }
+    }
+
+    // same as from_unpickled_pieces but only reads the first value from unpickled data.
+    // used for tensors in multi-GPU files where there's identical tensor in each of the shard. We
+    // just load the first one.
+    pub fn from_unpickled_pieces1<S: AsRef<str>>(
+        name: S,
+        data_source: DataSource,
+        direction: FromPiecesDirection,
+    ) -> Result<Tensor, UnpicklingError> {
+        let name: &str = name.as_ref();
+        let mut builders = Vec::new();
+        let unpickled = data_source.unpickled();
+        for unpickle in unpickled.iter() {
+            let val = unpickle
+                .get_str_key(name)
+                .ok_or(UnpicklingError::MissingField(name.to_string()))?;
+            let val = val
+                .to_tensor_builder(name.to_string())
+                .ok_or(UnpicklingError::InvalidTensorData)?;
+            builders.push(val);
+            break;
+        }
+        let val = TensorBuilder::load_from_pieces(&builders, name, data_source, direction)?;
         Ok(val)
     }
 
@@ -791,6 +831,83 @@ impl Tensor {
         result
     }
 
+    /// This is a special operation that undoes a transpose operation done by
+    /// transformers/models/llama/convert_llama_weights_to_hf.py transpose operation which reads:
+    ///
+    /// w.view(n_heads, dim // n_heads // 2, 2, dim).transpose(1, 2).reshape(dim, dim)
+    ///
+    /// For 7B model, it takes [4096, 4096] tensor, casts it to: [32, 64, 2, 4096], then
+    /// transposes the dimensions 64 and 2, and then reshapes it back to 4096x4096.
+    pub fn huggingface_llama_model_antitranspose(&self, n_heads: usize, dim: usize) -> Tensor {
+        assert!(dim % n_heads == 0);
+        assert!((dim / n_heads) % 2 == 0);
+
+        let d1_src = n_heads;
+        let d2_src = 2;
+        let d3_src = dim / n_heads / 2;
+        let d4_src = dim;
+        let d1_dst = n_heads;
+        let d2_dst = dim / n_heads / 2;
+        let d3_dst = 2;
+        let d4_dst = dim;
+
+        assert_eq!(
+            d1_src * d2_src * d3_src * d4_src,
+            d1_dst * d2_dst * d3_dst * d4_dst
+        );
+        assert_eq!(
+            d1_src * d2_src * d3_src * d4_src,
+            (self.rows * self.cols) as usize
+        );
+
+        fn cursors_to_offset(
+            d1: usize,
+            d2: usize,
+            d3: usize,
+            d4: usize,
+            d1_cursor: usize,
+            d2_cursor: usize,
+            d3_cursor: usize,
+            d4_cursor: usize,
+        ) -> usize {
+            assert!(d1_cursor < d1);
+            assert!(d2_cursor < d2);
+            assert!(d3_cursor < d3);
+            assert!(d4_cursor < d4);
+            d1_cursor * (d2 * d3 * d4) + d2_cursor * (d3 * d4) + d3_cursor * d4 + d4_cursor
+        }
+
+        fn offset_to_cursors(
+            offset: usize,
+            _d1: usize,
+            d2: usize,
+            d3: usize,
+            d4: usize,
+        ) -> (usize, usize, usize, usize) {
+            let d1_cursor = offset / (d2 * d3 * d4);
+            let d2_cursor = (offset % (d2 * d3 * d4)) / (d3 * d4);
+            let d3_cursor = (offset % (d3 * d4)) / d4;
+            let d4_cursor = offset % d4;
+            (d1_cursor, d2_cursor, d3_cursor, d4_cursor)
+        }
+
+        let mut result = Tensor::zeros(self.rows(), self.cols(), self.dtype());
+        for row in 0..self.rows() {
+            for col in 0..self.cols() {
+                let src_v = self.get_f32(row, col);
+                let src_offset = col + row * self.cols() as i64;
+                let (src_1, src_2, src_3, src4) =
+                    offset_to_cursors(src_offset as usize, d1_src, d2_src, d3_src, d4_src);
+                let dst_offset =
+                    cursors_to_offset(d1_dst, d2_dst, d3_dst, d4_dst, src_1, src_3, src_2, src4);
+                let dst_row = dst_offset / result.cols() as usize;
+                let dst_col = dst_offset % result.cols() as usize;
+                result.set_f32(dst_row as i64, dst_col as i64, src_v);
+            }
+        }
+        result
+    }
+
     pub fn transpose(&self) -> Tensor {
         #[cfg(feature = "opencl")]
         {
@@ -1148,7 +1265,10 @@ impl Tensor {
             );
         }
         if src.dtype != other.dtype {
-            panic!("Invalid matrix multiplication, different dtypes");
+            panic!(
+                "Invalid matrix multiplication, different dtypes: {:?} vs {:?}",
+                src.dtype, other.dtype
+            );
         }
         if self.rows != src.rows {
             panic!("Invalid matrix multiplication, different number of rows");
@@ -2223,20 +2343,19 @@ pub enum FromPiecesDirection {
 }
 
 impl TensorBuilder {
-    pub fn load<P: AsRef<Path>>(&self, data_dir: P) -> Result<Tensor, TensorError> {
-        let data_dir: &Path = data_dir.as_ref();
+    pub fn load(&self, data_source: DataSource) -> Result<Tensor, TensorError> {
         if self.stride < 1 {
             return Err(TensorError::InvalidStride(self.stride));
         }
         let tensor = unsafe { Tensor::uninitialized(self.rows, self.cols, self.dtype) };
-        let path = data_dir
-            .join(format!("consolidated.{:02}", 0))
-            .join("data")
-            .join(&self.src_path);
 
-        let mut f = std::fs::File::open(&path).unwrap();
-        f.seek(std::io::SeekFrom::Start(
-            self.dtype.bytes_for_nvalues(self.offset as usize) as u64,
+        let mut f = data_source.open(
+            PathBuf::from("data").join(&self.src_path),
+            &self.tensor_name,
+            0,
+        )?;
+        f.seek(std::io::SeekFrom::Current(
+            self.dtype.bytes_for_nvalues(self.offset as usize) as i64,
         ))?;
         let mut cursor: usize = 0;
         let mut buf: Vec<u8> = vec![0; self.dtype.bytes_for_nvalues(self.cols as usize)];
@@ -2250,21 +2369,36 @@ impl TensorBuilder {
         Ok(tensor.to_f32())
     }
 
-    /// Loads a tensor from multiple TensorBuilders; used to load a tensor from multiple files
-    /// which is what the larger LLaMA models do.
-    pub fn load_from_pieces<P: AsRef<Path>>(
+    /// Same as load_from_pieces but attempts two different names.
+    pub fn load_from_pieces2<S: AsRef<str>, S2: AsRef<str>>(
         builders: &[Self],
-        data_dir: P,
+        name: S,
+        name2: S2,
+        data_source: DataSource,
         direction: FromPiecesDirection,
     ) -> Result<Tensor, TensorError> {
-        let data_dir: &Path = data_dir.as_ref();
+        match Self::load_from_pieces(builders, name, data_source.clone(), direction.clone()) {
+            Ok(t) => Ok(t),
+            Err(_) => Self::load_from_pieces(builders, name2, data_source, direction),
+        }
+    }
+
+    /// Loads a tensor from multiple TensorBuilders; used to load a tensor from multiple files
+    /// which is what the larger LLaMA models do.
+    pub fn load_from_pieces<S: AsRef<str>>(
+        builders: &[Self],
+        name: S,
+        data_source: DataSource,
+        direction: FromPiecesDirection,
+    ) -> Result<Tensor, TensorError> {
+        let _name = name.as_ref();
         if builders.is_empty() {
             return Err(TensorError::TensorBuilderEmpty);
         }
 
         fn load_from_pieces_cols(
             builders: &[TensorBuilder],
-            data_dir: &Path,
+            data_source: DataSource,
         ) -> Result<Tensor, TensorError> {
             let mut total_cols: i64 = 0;
             let expected_rows: i64 = builders[0].rows;
@@ -2295,15 +2429,12 @@ impl TensorBuilder {
             let mut buf: Vec<u8> = vec![];
             let mut col_offset = 0;
             for (idx, builder) in builders.iter().enumerate() {
-                let path = data_dir
-                    .join(format!("consolidated.{:02}", idx))
-                    .join("data")
-                    .join(&builder.src_path);
+                let path = PathBuf::from("data").join(&builder.src_path);
+                let mut f = data_source.open(path.clone(), &builder.tensor_name, idx)?;
                 buf.truncate(0);
                 buf.resize(builder.dtype.bytes_for_nvalues(builder.cols as usize), 0);
-                let mut f = std::fs::File::open(&path).unwrap();
-                f.seek(std::io::SeekFrom::Start(
-                    builder.dtype.bytes_for_nvalues(builder.offset as usize) as u64,
+                f.seek(std::io::SeekFrom::Current(
+                    builder.dtype.bytes_for_nvalues(builder.offset as usize) as i64,
                 ))?;
                 for row in 0..builder.rows {
                     match f.read_exact(&mut buf) {
@@ -2338,7 +2469,7 @@ impl TensorBuilder {
 
         fn load_from_pieces_rows(
             builders: &[TensorBuilder],
-            data_dir: &Path,
+            data_source: DataSource,
         ) -> Result<Tensor, TensorError> {
             let mut total_rows: i64 = 0;
             let expected_cols: i64 = builders[0].cols;
@@ -2369,15 +2500,12 @@ impl TensorBuilder {
             let mut buf: Vec<u8> = vec![];
             let mut row_offset: i64 = 0;
             for (idx, builder) in builders.iter().enumerate() {
-                let path = data_dir
-                    .join(format!("consolidated.{:02}", idx))
-                    .join("data")
-                    .join(&builder.src_path);
+                let path = PathBuf::from("data").join(&builder.src_path);
+                let mut f = data_source.open(path.clone(), &builder.tensor_name, idx)?;
                 buf.truncate(0);
                 buf.resize(builder.dtype.bytes_for_nvalues(builder.cols as usize), 0);
-                let mut f = std::fs::File::open(&path).unwrap();
-                f.seek(std::io::SeekFrom::Start(
-                    builder.dtype.bytes_for_nvalues(builder.offset as usize) as u64,
+                f.seek(std::io::SeekFrom::Current(
+                    builder.dtype.bytes_for_nvalues(builder.offset as usize) as i64,
                 ))?;
                 for row in 0..builder.rows {
                     match f.read_exact(&mut buf) {
@@ -2411,8 +2539,8 @@ impl TensorBuilder {
         }
 
         match direction {
-            FromPiecesDirection::Rows => load_from_pieces_rows(builders, data_dir),
-            FromPiecesDirection::Cols => load_from_pieces_cols(builders, data_dir),
+            FromPiecesDirection::Rows => load_from_pieces_rows(builders, data_source.clone()),
+            FromPiecesDirection::Cols => load_from_pieces_cols(builders, data_source.clone()),
         }
     }
 }
@@ -2991,9 +3119,56 @@ mod tests {
 
     #[cfg(feature = "opencl")]
     #[test]
-    fn gpu_matrix_mul_vector_transposed_is_close_to_cpu_matrix_mul_vector_transposed() {
+    fn gpu_matrix_mul_vector_transposed_is_close_to_cpu_matrix_mul_vector_transposed_1() {
         let cl = OpenCL::new(false, 0).unwrap();
         let mut rng = rand::thread_rng();
+
+        // src.rows == 1
+
+        for _trial in 0..300 {
+            let a = rng.gen_range(1..=300);
+            let b = rng.gen_range(1..=300);
+
+            let mat1 = Tensor::random(1, a, TensorDType::Float16);
+            let mat2 = Tensor::random(b, a, TensorDType::Float16);
+            let mat3 = Tensor::random(1, b, TensorDType::Float16);
+            let mut mat1_gpu = mat1.clone();
+            let mut mat2_gpu = mat2.clone();
+            let mut mat3_gpu = mat3.clone();
+            mat1_gpu.to_gpu_inplace(&cl).unwrap();
+            mat2_gpu.to_gpu_inplace(&cl).unwrap();
+            mat3_gpu.to_gpu_inplace(&cl).unwrap();
+
+            let mat1 = mat1.to_f32();
+            let mat2 = mat2.to_f32();
+            let mut mat3 = mat3.to_f32();
+
+            mat3.matrix_mul_inplace_transposed(&mat1, &mat2);
+            mat3_gpu.matrix_mul_inplace_transposed(&mat1_gpu, &mat2_gpu);
+            mat3_gpu.to_cpu_inplace().unwrap();
+
+            assert_eq!(mat3.rows(), mat3_gpu.rows());
+            assert_eq!(mat3.cols(), mat3_gpu.cols());
+
+            for row in 0..mat3.rows {
+                for col in 0..mat3.cols {
+                    assert_relative_eq!(
+                        mat3.get_f32(row, col),
+                        mat3_gpu.get_f32(row, col),
+                        epsilon = 1e-2,
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "opencl")]
+    #[test]
+    fn gpu_matrix_mul_vector_transposed_is_close_to_cpu_matrix_mul_vector_transposed_2() {
+        let cl = OpenCL::new(false, 0).unwrap();
+        let mut rng = rand::thread_rng();
+
+        // other.rows == 1
 
         for _trial in 0..300 {
             let a = rng.gen_range(1..=300);

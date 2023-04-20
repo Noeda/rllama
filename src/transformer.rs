@@ -1,14 +1,15 @@
+use crate::data_source::DataSource;
 use crate::embedding::Embedding;
 use crate::tensor::{FromPiecesDirection, Tensor, TensorDType};
 #[cfg(feature = "opencl")]
 use crate::tensor_opencl_support::OpenCL;
 use crate::tokenizer::TokenId;
-use crate::unpickler;
+
 use crate::unpickler::UnpicklingError;
 use indicatif::ProgressBar;
 use num_complex::Complex;
 use rayon::prelude::*;
-use std::path::Path;
+
 use std::sync::{Arc, RwLock};
 
 type FreqsCis = Vec<Vec<Complex<f64>>>;
@@ -36,6 +37,8 @@ pub struct Transformer {
 #[derive(Clone)]
 pub struct DataSettings {
     #[cfg(feature = "opencl")]
+    percentage_to_gpu: f32,
+    #[cfg(feature = "opencl")]
     use_opencl_for_feedforward: bool,
     #[cfg(feature = "opencl")]
     use_opencl_for_attention: bool,
@@ -56,6 +59,7 @@ impl DataSettings {
             use_opencl_for_feedforward: false,
             use_opencl_for_attention: false,
             force_f16: false,
+            percentage_to_gpu: 1.0,
             cl: cl.clone(),
         }
     }
@@ -73,6 +77,28 @@ impl DataSettings {
         }
         self.use_opencl_for_feedforward = true;
         self.use_opencl_for_attention = true;
+        self
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn dont_use_opencl(mut self) -> DataSettings {
+        self.use_opencl_for_feedforward = false;
+        self.use_opencl_for_attention = false;
+        self
+    }
+
+    #[cfg(feature = "opencl")]
+    pub fn percentage_to_gpu(mut self, percentage: f32) -> DataSettings {
+        self.percentage_to_gpu = percentage;
+        if self.percentage_to_gpu >= 1.0 {
+            self.percentage_to_gpu = 1.0;
+        }
+        if self.percentage_to_gpu < 0.0 {
+            self.percentage_to_gpu = 0.0;
+        }
+        if self.percentage_to_gpu.is_nan() {
+            self.percentage_to_gpu = 0.0;
+        }
         self
     }
 
@@ -213,8 +239,7 @@ pub struct FeedForward {
 
 impl Transformer {
     #[allow(clippy::too_many_arguments)]
-    pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &[unpickler::Value],
+    pub fn from_unpickled(
         emb: Embedding,
         dim: usize,
         n_layers: usize,
@@ -222,7 +247,7 @@ impl Transformer {
         max_seq_len: usize,
         eps: f64,
         data_settings: DataSettings,
-        data_dir: P,
+        data_source: DataSource,
     ) -> Result<Transformer, UnpicklingError> {
         assert_eq!(dim % n_heads, 0);
         let head_dim = dim / n_heads;
@@ -230,20 +255,37 @@ impl Transformer {
                                      // implementation that used multi-GPU in the Facebook repo.
                                      // Should delete it later.
 
-        let data_dir: &Path = data_dir.as_ref();
-
         let progress_bar = ProgressBar::new(n_layers as u64);
         let layers: Vec<TransformerBlock> = (0..n_layers)
             .into_par_iter()
             .map(|layer_id| {
+                let data_settings = {
+                    #[cfg(feature = "opencl")]
+                    {
+                        let max_layers = n_layers;
+                        let last_layer_on_gpu = (data_settings.percentage_to_gpu
+                            * (max_layers - 1) as f32)
+                            .round() as usize;
+                        if layer_id > last_layer_on_gpu {
+                            data_settings.clone().dont_use_opencl()
+                        } else {
+                            data_settings.clone()
+                        }
+                    }
+                    #[cfg(not(feature = "opencl"))]
+                    {
+                        data_settings.clone()
+                    }
+                };
+
                 let result = TransformerBlock::from_unpickled(
-                    unpickled,
                     layer_id,
                     eps,
                     n_local_heads,
                     head_dim,
-                    data_settings.clone(),
-                    data_dir,
+                    dim,
+                    data_settings,
+                    data_source.clone(),
                 );
                 progress_bar.inc(1);
                 result
@@ -251,11 +293,16 @@ impl Transformer {
             .collect::<Result<Vec<TransformerBlock>, UnpicklingError>>()?;
         std::mem::drop(progress_bar);
 
-        let norm = RMSNorm::from_unpickled(unpickled, "norm.weight".to_string(), eps, data_dir)?;
-        let output = Tensor::from_unpickled_pieces(
-            unpickled,
+        let norm = RMSNorm::from_unpickled(
+            "norm.weight".to_string(),
+            "model.norm.weight".to_string(),
+            eps,
+            data_source.clone(),
+        )?;
+        let output = Tensor::from_unpickled_pieces2(
             "output.weight",
-            data_dir,
+            "lm_head.weight",
+            data_source.clone(),
             FromPiecesDirection::Rows,
         )?
         .to_f32();
@@ -336,36 +383,35 @@ impl Transformer {
 }
 
 impl TransformerBlock {
-    pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &[unpickler::Value],
+    pub fn from_unpickled(
         layer_id: usize,
         eps: f64,
         n_local_heads: usize,
         head_dim: usize,
+        dim: usize,
         data_settings: DataSettings,
-        data_dir: P,
+        data_source: DataSource,
     ) -> Result<Self, UnpicklingError> {
-        let data_dir: &Path = data_dir.as_ref();
-        let ff = FeedForward::from_unpickled(unpickled, layer_id, data_dir, data_settings.clone())?;
+        let ff = FeedForward::from_unpickled(layer_id, data_source.clone(), data_settings.clone())?;
         let attn = Attention::from_unpickled(
-            unpickled,
             layer_id,
             n_local_heads,
             head_dim,
+            dim,
             data_settings,
-            data_dir,
+            data_source.clone(),
         )?;
         let ffn_norm = RMSNorm::from_unpickled(
-            unpickled,
             format!("layers.{}.ffn_norm.weight", layer_id),
+            format!("model.layers.{}.post_attention_layernorm.weight", layer_id),
             eps,
-            data_dir,
+            data_source.clone(),
         )?;
         let attn_norm = RMSNorm::from_unpickled(
-            unpickled,
             format!("layers.{}.attention_norm.weight", layer_id),
+            format!("model.layers.{}.input_layernorm.weight", layer_id),
             eps,
-            data_dir,
+            data_source,
         )?;
         Ok(Self {
             feed_forward: ff,
@@ -401,20 +447,25 @@ impl TransformerBlock {
 }
 
 impl RMSNorm {
-    pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &[unpickler::Value],
+    pub fn from_unpickled(
         name: String,
+        name2: String,
         eps: f64,
-        data_dir: P,
+        data_source: DataSource,
     ) -> Result<RMSNorm, UnpicklingError> {
-        let data_dir: &Path = data_dir.as_ref();
-        let weights = Tensor::from_unpickled_pieces(
-            &unpickled[0..=0],
+        let weights = match Tensor::from_unpickled_pieces1(
             name,
-            data_dir,
+            data_source.clone(),
             FromPiecesDirection::Rows,
-        )?
-        .to_f32();
+        ) {
+            Ok(w) => w,
+            Err(_) => Tensor::from_unpickled_pieces1(
+                name2,
+                data_source.clone(),
+                FromPiecesDirection::Rows,
+            )?,
+        };
+        let weights = weights.to_f32();
 
         Ok(Self {
             eps,
@@ -430,30 +481,27 @@ impl RMSNorm {
 }
 
 impl FeedForward {
-    pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &[unpickler::Value],
+    pub fn from_unpickled(
         layer_id: usize,
-        data_dir: P,
+        data_source: DataSource,
         data_settings: DataSettings,
     ) -> Result<FeedForward, UnpicklingError> {
-        let data_dir: &Path = data_dir.as_ref();
-
-        let mut w1 = Tensor::from_unpickled_pieces(
-            unpickled,
+        let mut w1 = Tensor::from_unpickled_pieces2(
             format!("layers.{}.feed_forward.w1.weight", layer_id),
-            data_dir,
+            format!("model.layers.{}.mlp.gate_proj.weight", layer_id),
+            data_source.clone(),
             FromPiecesDirection::Rows,
         )?;
-        let mut w2 = Tensor::from_unpickled_pieces(
-            unpickled,
+        let mut w2 = Tensor::from_unpickled_pieces2(
             format!("layers.{}.feed_forward.w2.weight", layer_id),
-            data_dir,
+            format!("model.layers.{}.mlp.down_proj.weight", layer_id),
+            data_source.clone(),
             FromPiecesDirection::Cols,
         )?;
-        let mut w3 = Tensor::from_unpickled_pieces(
-            unpickled,
+        let mut w3 = Tensor::from_unpickled_pieces2(
             format!("layers.{}.feed_forward.w3.weight", layer_id),
-            data_dir,
+            format!("model.layers.{}.mlp.up_proj.weight", layer_id),
+            data_source.clone(),
             FromPiecesDirection::Rows,
         )?;
 
@@ -535,40 +583,43 @@ impl FeedForward {
 }
 
 impl Attention {
-    pub fn from_unpickled<P: AsRef<Path>>(
-        unpickled: &[unpickler::Value],
+    pub fn from_unpickled(
         layer_id: usize,
         n_local_heads: usize,
         head_dim: usize,
+        dim: usize,
         data_settings: DataSettings,
-        data_dir: P,
+        data_source: DataSource,
     ) -> Result<Attention, UnpicklingError> {
-        let data_dir: &Path = data_dir.as_ref();
-
-        let mut wq = Tensor::from_unpickled_pieces(
-            unpickled,
+        let mut wq = Tensor::from_unpickled_pieces2(
             format!("layers.{}.attention.wq.weight", layer_id),
-            data_dir,
+            format!("model.layers.{}.self_attn.q_proj.weight", layer_id),
+            data_source.clone(),
             FromPiecesDirection::Rows,
         )?;
-        let mut wk = Tensor::from_unpickled_pieces(
-            unpickled,
+        let mut wk = Tensor::from_unpickled_pieces2(
             format!("layers.{}.attention.wk.weight", layer_id),
-            data_dir,
+            format!("model.layers.{}.self_attn.k_proj.weight", layer_id),
+            data_source.clone(),
             FromPiecesDirection::Rows,
         )?;
-        let mut wv = Tensor::from_unpickled_pieces(
-            unpickled,
+        let mut wv = Tensor::from_unpickled_pieces2(
             format!("layers.{}.attention.wv.weight", layer_id),
-            data_dir,
+            format!("model.layers.{}.self_attn.v_proj.weight", layer_id),
+            data_source.clone(),
             FromPiecesDirection::Rows,
         )?;
-        let mut wo = Tensor::from_unpickled_pieces(
-            unpickled,
+        let mut wo = Tensor::from_unpickled_pieces2(
             format!("layers.{}.attention.wo.weight", layer_id),
-            data_dir,
+            format!("model.layers.{}.self_attn.o_proj.weight", layer_id),
+            data_source.clone(),
             FromPiecesDirection::Cols,
         )?;
+
+        if data_source.need_to_do_antitranspose() {
+            wq = wq.huggingface_llama_model_antitranspose(n_local_heads, dim);
+            wk = wk.huggingface_llama_model_antitranspose(n_local_heads, dim);
+        }
 
         if data_settings.force_f16 {
             wq = wq.to_f16();

@@ -8,8 +8,10 @@ RLLaMA is a pure Rust implementation of [LLaMA large language model inference.](
   * LLaMA-7B, LLaMA-13B, LLaMA-30B, LLaMA-65B all confirmed working
   * Hand-optimized AVX2 implementation
   * OpenCL support for GPU inference.
+  * Load model only partially to GPU with `--percentage-to-gpu` command line switch to run hybrid-GPU-CPU inference.
   * Simple HTTP API support, with the possibility of doing token sampling on
     client side
+  * It can load `Vicuna-13B` instruct-finetuned model.
 
 ## Performance
 
@@ -27,9 +29,9 @@ LLaMA-65B: AMD Ryzen 5950X:                       4186ms / token    f16    (pure
 
 OpenCL (all use f16):
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  247ms / token            (OpenCL on GPU)
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  216ms / token            (OpenCL on GPU)
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  680ms / token            (OpenCL on CPU)
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <I ran out of GPU memory :(>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  420ms / token            (OpenCL on GPU)
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token           (OpenCL on CPU)
 LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token           (OpenCL on CPU)
 ```
@@ -51,6 +53,32 @@ RUSTFLAGS="-C target-feature=+sse2,+avx,+fma,+avx2" cargo install rllama
 
 There is a `.cargo/config.toml` inside this repository that will enable these
 features if you install manually from this Git repository instead.
+
+## Install (Docker path)
+
+There is a Dockerfile you can use if you'd rather just get started quickly and
+you are familiar with `docker`. You still need to download the models yourself.
+
+
+### For CPU-only docker support:
+```
+docker build -f ./.docker/cpu.dockerfile -t rllama .
+```
+
+```
+docker run -v /models/LLaMA:/models:z -it rllama \
+    rllama --model-path /models/7B \
+           --param-path /models/7B/params.json \
+           --tokenizer-path /models/tokenizer.model \
+           --prompt "hi I like cheese"
+```
+
+Replace `/models/LLaMA` with the directory you've downloaded your models to.
+The `:z` in `-v` flag may or may not be needed depending on your distribution
+(I needed it on Fedora Linux)
+
+### For GPU-enabled docker support with nvidia:
+Follow the instructions [here](.docker/nvidia.md).
 
 ## LLaMA weights
 
@@ -92,6 +120,19 @@ rllama --tokenizer-path /path/to/tokenizer.model \
 
 Use `rllama --help` to see all the options.
 
+## Partially load model to GPU
+
+`rllama` can load only some of the transformer blocks to GPU. There is a
+command line argument:
+
+`--percentage-to-gpu <value between 0 and 1, defaults to 1>`
+
+1 means 100% and 0 means 0%. Values in-between load the model partially to GPU.
+
+You can use this to load LLaMA-13B or Vicuna-13B on a consumer GPU of 24
+gigabytes at around `--percentage-to-gpu 0.9` before it fails to out-of-memory
+error (if there are no competing programs on the computer that use GPU memory).
+
 ## Interactive mode
 
 There is a simple experimental interactive mode to try force a type of
@@ -99,48 +140,48 @@ back-and-forth discussion with the model.
 
 ```shell
 rllama ... --start-interactive \
-           --interactive-prompt-postfix " AI:" \  # (optional)
-           --interactive-stop "Human: "           # (optional but you probably want to set it)
+           --interactive-system-prompt "Helpful assistant helps curious human." \   # (optional)
+           --interactive-prompt-postfix  " ###Assistant:" \  # (optional)
+           --interactive-stop "###Human: "                   # (optional)
 ```
 
 In this mode, you need to type your prompt before the AI starts doing its work.
 If the AI outputs token sequence given in `--interactive-stop` (defaults to
-`</s>`) then it will ask for another input. You probably want to have `"Human:
-"` or something similar, see example below.
+`###Human:`) then it will ask for another input.
 
-`--interactive-prompt-postfix` is appended automatically to your answers. You
-can use this to force the AI to follow a pattern.
-`--hide-interactions` is here to hide the words already type (works well with multi-lining.
+The defaults match Vicuna-13B model:
 
-Here is a full example of
-interactive mode command line:
+```
+  --interactive-system-prompt    "A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions."
+  --interactive-prompt-postfix   " ###Assissant:"
+  --interactive-prompt-prefix    " "
+  --interactive-stop             "###Human:"
+```
+
+A more beautiful prompot with:
+```
+  --start-interactive \
+  --interactive-system-prompt "A chat between a curious human and an artificial intelligence assistant. 
+The assistant gives helpful, detailed, and polite answers to the human's questions.
+###Human:" \
+  --interactive-prompt-postfix  "
+###Assistant:" \
+  --interactive-stop "
+###Human: "
+```
+also type </s> to exit the endless chat.
+`--interactive-prompt-postfix` is appended automatically to your typed text and
+`--interactive-prompt-prefix` is appended to the start of your typed text.Here
+is an example of interactive mode command line with the default settings:
 
 ```shell
 rllama --f16 \
-       --param-path /LLaMA/7B/params.json \
-       --model-path /LLaMA/7B \
+       --param-path /models/vicuna13b/config.json \
+       --model-path /models/vicuna13b \
        --tokenizer-path /stonks/LLaMA/tokenizer.model \
-       --prompt "This is an interactive session between human and AI assistant. AI: Hi! How can I help you? Human:" \
-       --start-interactive \
-       --interactive-stop "Human:" \
-       --interactive-prompt-postfix " AI:"
+       --start-interactive
 ```
-a multi-line version is also possible 
-```shell
-rllama --f16 \
-       --param-path /LLaMA/7B/params.json \
-       --model-path /LLaMA/7B \
-       --tokenizer-path /stonks/LLaMA/tokenizer.model \
-       --prompt "This is an interactive session between human and AI assistant.
-AI: Hi! How can I help you?
-Human:" \
-       --start-interactive \
-       --hide-interactions \
-       --interactive-stop "
-Human:" \
-       --interactive-prompt-postfix "
-AI:"
-```
+
 ## Inference server
 
 `rllama` can run in an inference server mode with a simple HTTP JSON API. You
@@ -261,21 +302,11 @@ Weights are always cast to 16-bit floats for OpenCL.
 
 This is a hobby thing for me so don't expect updates or help.
 
-* Some other CPU implementations use quantization to reduce the size of weights
-  and generally speed up everything a lot. `rllama` does not have this.
+* There are various BLAS libraries like CLBlast to speed up matrix
+  multiplication that probably outperform my handwritten code.
 * I've heard there is some thing called Tensor Cores on nVidia GPUs. Not
   accessible with OpenCL. But might be accessible on Vulkan with a an
-  extension.
-* More sophisticated token sampling. I saw on Hackernews some comments how the
-  samplers included in Facebook's reference code are kinda garbage and you can
-  get much better results with good defaults and things like repetition
-  penalty.
-* There is an initial start-up time as the program has to pass through the
-  initial prompt. I don't know if this start-up time can be eliminated
-  completely but it could be cached on disk. Use cases like having a standard
-  prompt to prime the text generation that you reuse many times.
-* Stanford released some instruct-finetuned LLaMA-7B, once I find the weights
-  then I'd like to try make a chat-like command-line interface.
+  extension. Or with cuBLAS.
 
 ## Benchmarks
 
@@ -298,26 +329,26 @@ LLaMA-13B: AMD Ryzen 3950X: 2005ms / token
 # commit 63d27dba9091823f8ba11a270ab5790d6f597311  (13 March 2023)
 # This one has one part of the transformer moved to GPU as a type of smoke test
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  567ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  567ms / token
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  956ms / token
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  987ms / token
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  987ms / token
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1706ms / token
 
 # commit 35b0c372a87192761e17beb421699ea5ad4ac1ce  (13 March 2023)
 # I moved some attention stuff to OpenCL too.
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  283ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  283ms / token
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  679ms / token
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <ran out of GPU memory>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  <ran out of GPU memory>
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1226ms / token
 
 # commit de5dd592777b3a4f5a9e8c93c8aeef25b9294364  (15 March 2023)
 # The matrix multiplication on GPU is now much faster. It didn't have that much
 # effect overall though, but I got modest improvement on LLaMA-7B GPU.
 
-LLaMA-7B:  AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  247ms / token
+LLaMA-7B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  247ms / token
 LLaMA-7B:  AMD Ryzen 3950X + OpenCL Ryzen 3950X:  680ms / token
-LLaMA-13B: AMD Ryzen 3950X + OpenCL GTX 3090 Ti:  <ran out of GPU memory>
+LLaMA-13B: AMD Ryzen 3950X + OpenCL RTX 3090 Ti:  <ran out of GPU memory>
 LLaMA-13B: AMD Ryzen 3950X + OpenCL Ryzen 3950X:  1232ms / token
 LLaMA-30B: AMD Ryzen 5950X + OpenCL Ryzen 5950X:  4098ms / token
 
@@ -334,4 +365,11 @@ LLaMA-13B: AMD Ryzen 3950X: 1029ms / token    f16
 LLaMA-13B: AMD Ryzen 3950X: 1930ms / token    f32
 LLaMA-30B: AMD Ryzen 5950X: 2112ms / token    f16
 LLaMA-65B: AMD Ryzen 5950X: 4186ms / token    f16
+
+# commit f5328ab5bd62fe9bd930539382b13e9033434a0b (5 April 2023)
+# I've worked on making Vicuna-13B runnable and added an option to only
+# partially use GPU. Improved one of the OpenCL kernels:
+
+LLaMA-7B:   AMD Ryzen 3950X + OpenCL RTX 3090 Ti:    420ms (at 90%/10% GPU/CPU split)
+LLaMA-13B:  AMD Ryzen 3950X + OpenCL RTX 3090 Ti:    216ms (at 100% GPU)
 ```

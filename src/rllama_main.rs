@@ -1,21 +1,28 @@
+use crate::data_source::DataSource;
 use crate::embedding::Embedding;
-use crate::semaphore::Semaphore;
+use crate::model_params::ModelParams;
+
 #[cfg(feature = "opencl")]
 use crate::tensor_opencl_support::OpenCL;
 use crate::token_sampler::TokenSampler;
 use crate::tokenizer::{TokenId, Tokenizer};
-use crate::transformer::{DataSettings, Transformer, TransformerCaches};
-use crate::unpickler;
-use crate::unpickler::Value;
+use crate::transformer::{DataSettings, Transformer};
+
+#[cfg(feature = "server")]
+use crate::semaphore::Semaphore;
+#[cfg(feature = "server")]
+use crate::transformer::TransformerCaches;
 use clap::Parser;
 use colored::Colorize;
 #[cfg(feature = "server")]
 use rocket::{response::status, response::Stream, Data, State};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(feature = "server")]
+use std::sync::RwLock;
 
 // Refer to README.md to see what all these options mean.
 #[derive(Parser, Clone)]
@@ -37,9 +44,13 @@ struct Cli {
     prompt_file: Option<String>,
 
     #[arg(long)]
-    interactive_stop: Option<String>,
+    interactive_system_prompt: Option<String>,
+    #[arg(long)]
+    interactive_stop: Vec<String>,
     #[arg(long)]
     interactive_prompt_postfix: Option<String>,
+    #[arg(long)]
+    interactive_prompt_prefix: Option<String>,
     #[arg(long, action)]
     start_interactive: bool,
     #[arg(long, action)]
@@ -69,6 +80,10 @@ struct Cli {
     #[arg(long)]
     opencl_device: Option<usize>,
 
+    #[cfg(feature = "opencl")]
+    #[arg(long)]
+    percentage_to_gpu: Option<f32>,
+
     #[arg(long, action)]
     inference_server: bool,
 
@@ -91,26 +106,42 @@ struct Cli {
     inference_server_exit_after_one_query: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct ModelParams {
-    dim: usize,
-    multiple_of: usize,
-    n_heads: usize,
-    n_layers: usize,
-    norm_eps: f64,
-    vocab_size: i64,
-}
-
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let model_path = cli.model_path.clone();
     let tokenizer_path = cli.tokenizer_path.clone();
     let param_path = cli.param_path.clone();
-    let interactive_stop = cli.interactive_stop.clone().unwrap_or("[EOF]".to_string());
+    let interactive_system_prompt = cli.interactive_system_prompt.clone().unwrap_or("A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, terse answers to the human's questions.### Human:".to_string());
+    let mut interactive_stop = cli.interactive_stop.clone();
+    if interactive_stop.is_empty() {
+        // Desperado to catch all weird variants of ###Human the model might spit out.
+        interactive_stop = vec![
+            "### Human:".to_string(),
+            "###Human:".to_string(),
+            "### Human: ".to_string(),
+            "###Human: ".to_string(),
+            " ### Human:".to_string(),
+            " ###Human:".to_string(),
+            " ### Human: ".to_string(),
+            " ###Human: ".to_string(),
+            "\n### Human:".to_string(),
+            "\n###Human:".to_string(),
+            "\n### Human: ".to_string(),
+            "\n###Human: ".to_string(),
+            "\n ### Human:".to_string(),
+            "\n ###Human:".to_string(),
+            "\n ### Human: ".to_string(),
+            "\n ###Human: ".to_string(),
+        ];
+    }
+    let interactive_prompt_prefix = cli
+        .interactive_prompt_prefix
+        .clone()
+        .unwrap_or(" ".to_string());
     let interactive_prompt_postfix = cli
         .interactive_prompt_postfix
         .clone()
-        .unwrap_or("".to_string());
+        .unwrap_or("### Assistant:".to_string());
     let start_interactive = cli.start_interactive;
     let is_interactive = cli.is_interactive || start_interactive;
     let hide_interactions = cli.hide_interactions;
@@ -130,6 +161,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_threads
         }
     };
+
+    #[cfg(feature = "opencl")]
+    let percentage_to_gpu: f32 = cli.percentage_to_gpu.unwrap_or(1.0);
 
     let mut be_quiet: bool = false;
     if !colored::control::SHOULD_COLORIZE.should_colorize() {
@@ -167,13 +201,14 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    #[cfg(feature = "opencl")]
+    let has_opencl = opencl.is_some();
+
     // Read ModelParams from param_path, we expect it to be JSON
     let mut fs = std::fs::File::open(&param_path)?;
     let mut bs = Vec::new();
     fs.read_to_end(&mut bs)?;
     std::mem::drop(fs);
-    let params: ModelParams = serde_json::from_slice(&bs)?;
-    pln!("Loaded model parameters from {}.", param_path);
 
     let prompt: String = match (&cli.prompt, &cli.prompt_file, start_interactive) {
         (Some(ref prompt), None, _) => {
@@ -207,36 +242,13 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tok = Tokenizer::load(tokenizer_path.as_str())?;
     pln!("Tokenizer loaded. Loading model from {}...", model_path);
 
-    let mut unpickle_results: Vec<Value> = vec![];
+    let model_data_source = DataSource::from_inferred_source(model_path.clone())?;
 
-    let mut part: usize = 0;
-    loop {
-        let model_path: PathBuf = model_path.clone().into();
-        let base_path = model_path.join(format!("consolidated.{:02}", part));
-        // The data file is in consolidated.XX/data.pkl where XX is the part number.
-        let full_path = base_path.join("data.pkl");
-        let mut fs = match std::fs::File::open(&full_path) {
-            Ok(fs) => fs,
-            Err(err) => {
-                if err.kind() == std::io::ErrorKind::NotFound {
-                    break;
-                } else {
-                    return Err(err.into());
-                }
-            }
-        };
-        let mut bs = Vec::new();
-        fs.read_to_end(&mut bs)?;
-        std::mem::drop(fs);
-        pln!("Read data.pkl from path {}", full_path.display());
-
-        let result = unpickler::unpickle(&bs)?;
-        unpickle_results.push(result);
-        part += 1;
-    }
+    let params: ModelParams = serde_json::from_slice(&bs)?;
+    pln!("Loaded model parameters from {}.", param_path);
 
     pln!("Loading embeddings from {}...", model_path);
-    let emb = Embedding::from_unpickled(&unpickle_results, model_path.clone())?;
+    let emb = Embedding::from_unpickled(model_data_source.clone())?;
 
     let max_seq_len = cli.max_seq_len.unwrap_or(1024);
 
@@ -245,7 +257,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             if let Some(opencl) = opencl {
                 let ds = DataSettings::new(Some(opencl));
-                ds.use_opencl()
+                ds.percentage_to_gpu(percentage_to_gpu).use_opencl()
             } else {
                 DataSettings::new(None)
             }
@@ -254,13 +266,17 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         DataSettings::new()
     };
 
+    #[cfg(feature = "opencl")]
+    if cli.f16 || has_opencl {
+        data_settings = data_settings.force_f16();
+    }
+    #[cfg(not(feature = "opencl"))]
     if cli.f16 {
         data_settings = data_settings.force_f16();
     }
 
     pln!("Loading transformer weights from {}...", model_path);
     let tr = Transformer::from_unpickled(
-        &unpickle_results,
         emb,
         params.dim,
         params.n_layers,
@@ -268,7 +284,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_seq_len,
         params.norm_eps,
         data_settings,
-        model_path,
+        model_data_source,
     )?;
     pln!("All is loaded. Starting inference.");
 
@@ -293,6 +309,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             tok.clone(),
             prompt.clone(),
             interactive_stop.clone(),
+            interactive_system_prompt.clone(),
+            interactive_prompt_prefix.clone(),
             interactive_prompt_postfix.clone(),
             start_interactive,
             is_interactive,
@@ -376,6 +394,7 @@ fn server_inference(
     panic!("Starting web server failed.");
 }
 
+#[cfg(feature = "server")]
 fn is_false(b: &bool) -> bool {
     !b
 }
@@ -705,7 +724,9 @@ fn command_line_inference(
     tr: Arc<Transformer>,
     tok: Arc<Tokenizer>,
     prompt: String,
-    interactive_stop: String,
+    interactive_stop: Vec<String>,
+    interactive_system_prompt: String,
+    interactive_prompt_prefix: String,
     interactive_prompt_postfix: String,
     start_interactive: bool,
     is_interactive: bool,
@@ -724,7 +745,20 @@ fn command_line_inference(
         };
     }
 
+    let mut prompt = prompt;
+
+    if start_interactive && !prompt.is_empty() {
+        return Err(
+            "Cannot start interactive mode with a prompt. Use --interactive-system-prompt instead."
+                .into(),
+        );
+    }
+    if start_interactive {
+        prompt = interactive_system_prompt.clone();
+    }
+
     let mut toks_id: Vec<TokenId> = tok.tokenize_to_ids(prompt.clone());
+    let mut toks_str: String = prompt.clone();
     let mut prev_pos = 0;
     let mut token_sampler = TokenSampler::new()
         .temperature(1.0)
@@ -744,10 +778,9 @@ fn command_line_inference(
     if let Some(repetition_penalty) = cli.repetition_penalty {
         token_sampler = token_sampler.repetition_penalty(repetition_penalty);
     }
-    let mut stop_tokens = tok.more_tokenize_to_ids(interactive_stop.clone());
+    //let mut stop_tokens = tok.tokenize_to_ids(interactive_stop.clone());
     pln!("---");
     pln!(" dim: {}", params.dim);
-    pln!(" multiple_of: {}", params.multiple_of);
     pln!(" n_heads: {}", params.n_heads);
     pln!(" n_layers: {}", params.n_layers);
     pln!(" norm_eps: {}", params.norm_eps);
@@ -765,9 +798,15 @@ fn command_line_inference(
     );
     if is_interactive {
         pln!(
-            "  Interactive mode stop token sequence: {}",
-            interactive_stop.as_str()
+            "  Interactive mode stop token sequences: {:?}",
+            interactive_stop
         );
+        pln!("---");
+        pln!("System prompt:");
+        pln!("  {}", interactive_system_prompt);
+        pln!("---");
+        pln!("Interactive prompt prefix: {}", interactive_prompt_prefix);
+        pln!("Interactive prompt postfix: {}", interactive_prompt_postfix);
     }
     pln!("---");
     pln!(
@@ -803,11 +842,12 @@ fn command_line_inference(
                     newinput.pop();
                 }
             }
+            newinput = interactive_prompt_prefix.clone() + &newinput;
             newinput += &interactive_prompt_postfix;
             user_token = tok.more_tokenize_to_ids(newinput.clone());
             
             interactive = false;
-            if hide_interactions && interactive_prompt_postfix.len() > 0 {
+        }
                 if interactive_prompt_postfix.starts_with('\n') {
                     //is that safe ?
                     print!("{}", &interactive_prompt_postfix.as_str()[1..interactive_prompt_postfix.len()].truecolor(128, 128, 255));
@@ -842,6 +882,7 @@ fn command_line_inference(
             } else {
                 tok_print += tok_str.replace('▁', " ").as_str();
             }
+            toks_str += tok_print.as_str();
             if first && tok_idx < toks_id.len() - 2 {
                 // intentionally left empty, already print
             }
