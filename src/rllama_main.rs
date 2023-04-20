@@ -46,13 +46,17 @@ struct Cli {
     #[arg(long)]
     interactive_system_prompt: Option<String>,
     #[arg(long)]
-    interactive_stop: Vec<String>,
+    interactive_stop: String,
     #[arg(long)]
     interactive_prompt_postfix: Option<String>,
     #[arg(long)]
     interactive_prompt_prefix: Option<String>,
     #[arg(long, action)]
     start_interactive: bool,
+    #[arg(long, action)]
+    is_interactive: bool,
+    #[arg(long, action)]
+    show_interactions: bool,
 
     #[arg(long)]
     max_seq_len: Option<usize>,
@@ -109,7 +113,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let param_path = cli.param_path.clone();
     let interactive_system_prompt = cli.interactive_system_prompt.clone().unwrap_or("A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, terse answers to the human's questions.### Human:".to_string());
     let mut interactive_stop = cli.interactive_stop.clone();
-    if interactive_stop.is_empty() {
+    /*if interactive_stop.is_empty() {
         // Desperado to catch all weird variants of ###Human the model might spit out.
         interactive_stop = vec![
             "### Human:".to_string(),
@@ -129,7 +133,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "\n ### Human: ".to_string(),
             "\n ###Human: ".to_string(),
         ];
-    }
+    }*/
     let interactive_prompt_prefix = cli
         .interactive_prompt_prefix
         .clone()
@@ -139,6 +143,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .unwrap_or("### Assistant:".to_string());
     let start_interactive = cli.start_interactive;
+    let is_interactive = cli.is_interactive || start_interactive;
+    let show_interactions = cli.show_interactions;
     #[cfg(not(feature = "server"))]
     if cli.inference_server {
         eprintln!("Inference server is not enabled in this build.");
@@ -307,6 +313,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             interactive_prompt_prefix.clone(),
             interactive_prompt_postfix.clone(),
             start_interactive,
+            is_interactive,
+            show_interactions,
             be_quiet,
             max_seq_len,
             params.clone(),
@@ -716,11 +724,13 @@ fn command_line_inference(
     tr: Arc<Transformer>,
     tok: Arc<Tokenizer>,
     prompt: String,
-    interactive_stop: Vec<String>,
+    interactive_stop: String,
     interactive_system_prompt: String,
     interactive_prompt_prefix: String,
     interactive_prompt_postfix: String,
     start_interactive: bool,
+    is_interactive: bool,
+    show_interactions: bool,
     be_quiet: bool,
     max_seq_len: usize,
     params: ModelParams,
@@ -748,7 +758,6 @@ fn command_line_inference(
     }
 
     let mut toks_id: Vec<TokenId> = tok.tokenize_to_ids(prompt.clone());
-    let mut toks_str: String = prompt.clone();
     let mut prev_pos = 0;
     let mut token_sampler = TokenSampler::new()
         .temperature(1.0)
@@ -768,6 +777,7 @@ fn command_line_inference(
     if let Some(repetition_penalty) = cli.repetition_penalty {
         token_sampler = token_sampler.repetition_penalty(repetition_penalty);
     }
+    let mut stop_tokens = tok.more_tokenize_to_ids(interactive_stop.clone());
     pln!("---");
     pln!(" dim: {}", params.dim);
     pln!(" n_heads: {}", params.n_heads);
@@ -785,7 +795,7 @@ fn command_line_inference(
         "Repetition penalty: {}",
         token_sampler.get_repetition_penalty()
     );
-    if start_interactive {
+    if is_interactive {
         pln!(
             "  Interactive mode stop token sequences: {:?}",
             interactive_stop
@@ -823,20 +833,46 @@ fn command_line_inference(
         let preds = tr.forward(&toks_id[prev_pos..], prev_pos, &mut caches);
         if interactive {
             let mut newinput = String::new();
-            std::io::stdin().read_line(&mut newinput)?;
-            // removing new line from input
-            if newinput.ends_with('\n') {
-                let _ = newinput.pop();
+            loop {
+                let mut newline = String::new();
+                std::io::stdin().read_line(&mut newline)?;
+                //removing new line from input
+                if newline.ends_with('\n') {
+                    newline.pop();
+                    if newline.ends_with('\r') {
+                        newline.pop();
+                    }
+                }
+                
+                if !newline.ends_with('\\') {
+                    newinput = newinput + &newline.clone();
+                    break;
+                }
+                else {
+                    newline.pop();
+                    newinput = newinput + &newline.clone() + "\n";
+                }
             }
-            newinput = interactive_prompt_prefix.clone() + &newinput;
-            newinput += &interactive_prompt_postfix;
-            user_token = tok.tokenize_to_ids(newinput.clone());
+            //exit clause
+            if newinput.starts_with("</s>") { stop_seen = true; break;}
 
-            // removing [start token] as it is already in the prompt, and tokenize_to_ids  adds it.
-            let _ = user_token.remove(0);
+            newinput = interactive_prompt_prefix.clone() + &newinput;
+
+            newinput += &interactive_prompt_postfix;
+            user_token.append(&mut tok.more_tokenize_to_ids(newinput.clone()));
+            
             interactive = false;
+        if !show_interactions {
+                if interactive_prompt_postfix.starts_with('\n') {
+                    //is that safe ?
+                    print!("{}", &interactive_prompt_postfix.as_str()[1..interactive_prompt_postfix.len()].truecolor(128, 128, 255));
+                }
+                else {
+                    print!("{}", interactive_prompt_postfix.as_str().truecolor(128, 128, 255));
+                }
+            }
         }
-        let (highest_pred_idx, token_prob);
+        let (mut highest_pred_idx, mut token_prob);
 
         if user_token.len() > 0 {
             highest_pred_idx = user_token.remove(0);
@@ -853,18 +889,20 @@ fn command_line_inference(
             let mut tok_print: String = "".to_string();
             let tok_str = tok.id_to_str(*tok_id);
             if tok_str == "</s>" {
-                tok_print += "";
                 stop_seen = true;
             }
-            if tok_str == "<0x0A>" {
+            else if tok_str == "<0x0A>" {
                 tok_print += "\n";
             } else {
                 tok_print += tok_str.replace('▁', " ").as_str();
             }
-            toks_str += tok_print.as_str();
             if first && tok_idx < toks_id.len() - 2 {
                 // intentionally left empty, already print
-            } else {
+            }
+            else if !show_interactions && token_prob == 0.0 {
+            // intentionally left empty, User print
+            }
+            else {
                 let redness: f32 = token_prob * 255.0;
                 let redness = if redness > 255.0 {
                     255
@@ -878,12 +916,15 @@ fn command_line_inference(
                     tok_print.truecolor(128 + redness / 2, 255 - redness / 2, 128)
                 );
             };
-            for stop_str in interactive_stop.iter() {
-                if !first && toks_str.ends_with(stop_str.as_str()) {
-                    if start_interactive {
-                        interactive = true;
-                    }
-                    break;
+            if !first
+                && tok_id == stop_tokens.last().unwrap()
+                && tok_idx + prev_pos > stop_tokens.len()
+                && toks_id
+                    [prev_pos + 1 + tok_idx - (stop_tokens.len() - 1)..prev_pos + 1 + tok_idx + 1]
+                    == stop_tokens
+            {
+                if is_interactive {
+                    interactive = true;
                 }
             }
         }
@@ -896,7 +937,18 @@ fn command_line_inference(
         prev_pos = toks_id.len() - 1;
         first = false;
         if stop_seen {
-            break;
+            if is_interactive {
+                //don't stop, just ask for more
+                stop_seen = false;
+                if !show_interactions {
+                    print!("{}",interactive_stop.as_str().truecolor(128, 128, 255));
+                    let _ = std::io::stdout().flush();
+                }
+                user_token = tok.more_tokenize_to_ids(interactive_stop.clone());
+            }
+            else {
+                break;
+            }
         }
     }
     println!();

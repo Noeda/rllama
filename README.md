@@ -11,7 +11,7 @@ RLLaMA is a pure Rust implementation of [LLaMA large language model inference.](
   * Load model only partially to GPU with `--percentage-to-gpu` command line switch to run hybrid-GPU-CPU inference.
   * Simple HTTP API support, with the possibility of doing token sampling on
     client side
-  * It can load `Vicuna-13B` instruct-finetuned model (although currently there is no nice UX).
+  * It can load `Vicuna-13B` instruct-finetuned model.
 
 ## Performance
 
@@ -158,21 +158,29 @@ The defaults match Vicuna-13B model:
   --interactive-stop             "###Human:"
 ```
 
+A more beautiful prompot with:
+```
+  --start-interactive \
+  --interactive-system-prompt "A chat between a curious human and an artificial intelligence assistant. 
+The assistant gives helpful, detailed, and polite answers to the human's questions.
+###Human:" \
+  --interactive-prompt-postfix  "
+###Assistant:" \
+  --interactive-stop "
+###Human: "
+```
+also type </s> to exit the endless chat.
 `--interactive-prompt-postfix` is appended automatically to your typed text and
 `--interactive-prompt-prefix` is appended to the start of your typed text.Here
 is an example of interactive mode command line with the default settings:
 
 ```shell
 rllama --f16 \
-       --param-path /models/vicuna13b/params.json \
+       --param-path /models/vicuna13b/config.json \
        --model-path /models/vicuna13b \
        --tokenizer-path /stonks/LLaMA/tokenizer.model \
        --start-interactive
 ```
-
-As of writing of this, the output is not formatted prettily for chat and there
-is no visual indication of when you are supposed to be typing. That will come
-later.
 
 ## Inference server
 
