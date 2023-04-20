@@ -42,6 +42,10 @@ struct Cli {
     interactive_prompt_postfix: Option<String>,
     #[arg(long, action)]
     start_interactive: bool,
+    #[arg(long, action)]
+    is_interactive: bool,
+    #[arg(long, action)]
+    hide_interactions: bool,
 
     #[arg(long)]
     max_seq_len: Option<usize>,
@@ -108,6 +112,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .unwrap_or("".to_string());
     let start_interactive = cli.start_interactive;
+    let is_interactive = cli.is_interactive || start_interactive;
+    let hide_interactions = cli.hide_interactions;
     #[cfg(not(feature = "server"))]
     if cli.inference_server {
         eprintln!("Inference server is not enabled in this build.");
@@ -289,6 +295,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             interactive_stop.clone(),
             interactive_prompt_postfix.clone(),
             start_interactive,
+            is_interactive,
+            hide_interactions,
             be_quiet,
             max_seq_len,
             params.clone(),
@@ -700,6 +708,8 @@ fn command_line_inference(
     interactive_stop: String,
     interactive_prompt_postfix: String,
     start_interactive: bool,
+    is_interactive: bool,
+    hide_interactions: bool,
     be_quiet: bool,
     max_seq_len: usize,
     params: ModelParams,
@@ -753,7 +763,7 @@ fn command_line_inference(
         "Repetition penalty: {}",
         token_sampler.get_repetition_penalty()
     );
-    if start_interactive {
+    if is_interactive {
         pln!(
             "  Interactive mode stop token sequence: {}",
             interactive_stop.as_str()
@@ -797,6 +807,15 @@ fn command_line_inference(
             user_token = tok.more_tokenize_to_ids(newinput.clone());
             
             interactive = false;
+            if hide_interactions && interactive_prompt_postfix.len() > 0 {
+                if interactive_prompt_postfix.starts_with('\n') {
+                    //is that safe ?
+                    print!("{}", &interactive_prompt_postfix.as_str()[1..interactive_prompt_postfix.len()].truecolor(128, 128, 255));
+                }
+                else {
+                    print!("{}", interactive_prompt_postfix.as_str().truecolor(128, 128, 255));
+                }
+            }
         }
         let (mut highest_pred_idx, mut token_prob);
 
@@ -825,7 +844,11 @@ fn command_line_inference(
             }
             if first && tok_idx < toks_id.len() - 2 {
                 // intentionally left empty, already print
-            } else {
+            }
+            else if hide_interactions && token_prob == 0.0 {
+            // intentionally left empty, User print
+            }
+            else {
                 let redness: f32 = token_prob * 255.0;
                 let redness = if redness > 255.0 {
                     255
@@ -846,7 +869,7 @@ fn command_line_inference(
                     [prev_pos + 1 + tok_idx - (stop_tokens.len() - 1)..prev_pos + 1 + tok_idx + 1]
                     == stop_tokens
             {
-                if start_interactive {
+                if is_interactive {
                     interactive = true;
                 }
             }
