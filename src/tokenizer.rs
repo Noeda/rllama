@@ -107,12 +107,7 @@ impl Tokenizer {
 
     // Tries to find a token from dictionary.
     pub fn str_to_id(&self, s: &str) -> Option<TokenId> {
-        for (piece_str, piece_info) in self.pieces.iter() {
-            if piece_str == s {
-                return Some(piece_info.idx as i32);
-            }
-        }
-        None
+        self.pieces.get(s).map(|piece_info| piece_info.idx as i32)
     }
 
     // Converts a string to a Vec<&str>
