@@ -168,7 +168,7 @@ impl DataSource {
         let mut unpickle_results: Vec<Value> = vec![];
         let mut part: usize = 0;
         loop {
-            let model_path: PathBuf = path.clone().into();
+            let model_path: PathBuf = path.into();
             let base_path = model_path.join(format!("consolidated.{:02}", part));
             // The data file is in consolidated.XX/data.pkl where XX is the part number.
             let full_path = base_path.join("data.pkl");

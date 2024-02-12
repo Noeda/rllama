@@ -1,4 +1,3 @@
-#![feature(stdsimd)]
 #![feature(decl_macro)]
 
 pub mod data_source;
